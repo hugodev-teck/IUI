@@ -1,0 +1,8 @@
+{
+  "uuid": "prism@dock.ui",
+  "name": "IUI Bêta",
+  "description": "Ceci est l'extention officiel de PrismOS",
+  "shell-version": [ "43.9" ],
+  "url": "prism-project-id.web.app",
+  "permissions": ["org.gnome.shell"]
+}

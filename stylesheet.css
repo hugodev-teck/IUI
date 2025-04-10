@@ -1,0 +1,394 @@
+.my-dock-container {
+    background-color: #212425;
+    padding: 10px;
+    border-radius: 15px;
+    spacing: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.network-settings-container {
+    background-color: #212425;
+    padding: 10px;
+    border-radius: 15px;
+    spacing: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 55px;
+}
+
+.notification-box-container {
+    background-color: #212425;
+    padding: 10px;
+    border-radius: 15px;
+    spacing: 5px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 55px;
+}
+
+.app-icon {
+    background-color: transparent;
+    padding: 10px;
+    border-radius: 7px;
+    margin: 0 5px;
+}
+
+.app-icon:hover {
+    background-color: #5b5e5f;
+}
+
+.app-icon StIcon {
+    icon-size: 32px;
+}
+
+.app-menu {
+    background-color: rgb(197, 197, 197);
+    padding: 20px;
+    border-radius: 10px;
+}
+
+.app-menu-scrollview {
+    max-height: 100%;
+}
+
+.text-box {
+    text-align: center;
+    background-color: rgba(136, 136, 136, 0.459);
+    padding: 4px;
+    border-radius: 5px;
+}
+
+.search-entry {
+    padding: 5px;
+    align-items: center;
+    margin-top: 0px;
+}
+
+.search-entry {
+    font-size: 14px;
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    x_expand: true;
+}
+
+.header-text {
+    margin-bottom: 10px;
+    font-size: 22px;
+    font-family: sans-serif;
+}
+
+.vol-text {
+    margin-bottom: 2px;
+    margin-top: 6px;
+    margin-left: 5px;
+    margin-right: 5px;
+    font-size: 16px;
+    font-family: sans-serif;
+    color:#e7e7e7;
+}
+
+.alphabet-header {
+    font-size: 20px;
+    font-family: sans-serif;
+    margin-top: 5px;
+    margin-left: 20px;
+}
+.network-icon {
+    padding: 3px;
+    icon-size: 32px;
+}
+.net-box {
+    background-color: #212425;
+    border-radius: 15px;
+}
+.network-button {
+    background-color: #212425;
+    border-radius: 7px;
+}
+.network-button:hover {
+    background-color: #5b5e5f;
+}
+.feature-button {
+    padding: 10px;
+    margin: 5px;
+}
+
+.feature-button-net {
+    padding: 10px;
+}
+
+.feature-icon {
+    margin-bottom: 5px;
+}
+
+/* Élément individuel de la liste des options */
+.option-item {
+    background-color: transparent;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+/* Nom de l'option */
+.option-name {
+    font-size: 14px;
+    margin-top: 10px;
+    color: #ffffff;
+}
+
+/* Bouton de bascule pour les options */
+.feature-toggle {
+    background-color: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+}
+/* Icône de bascule */
+.feature-icon-acces {
+    width: 32px;
+    height: 32px;
+}
+
+.feature-label {
+    text-align: center;
+}
+
+.feature-box {
+    padding: 10px;
+    align-items: center;
+    background-color: #a1a1a1;
+    border-radius: 10px;
+}
+
+.feature-box:hover {
+    background-color: #e7e7e7;
+}
+.header-wifi {
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    border-radius: 14px;
+    justify-content: space-between;
+}
+.header-bluetooth {
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    border-radius: 14px;
+    justify-content: space-between;
+}
+.header-accessibility {
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    border-radius: 14px;
+    justify-content: space-between;
+}
+.header-volume {
+    padding: 10px;
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    border-radius: 14px;
+    justify-content: space-between;
+}
+
+.label-title {
+    font-size: 16px;
+    font-weight: bold;
+    font-family: sans-serif;
+    margin-top: 13px;
+}
+.label-title-2 {
+    font-size: 16px;
+    font-weight: bold;
+    font-family: sans-serif;
+    margin-top: 9px;
+}
+.feature-wifi {
+    height: 30px;
+    margin-left: 50px;
+}
+.feature-bluetooth {
+    height: 30px;
+    margin-left: 50px;
+}
+
+.notification-container {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+}
+
+.notification-box {
+    background-color: rgba(0, 0, 0, 0.8);
+    border-radius: 5px;
+    padding: 10px;
+    color: white;
+    margin-bottom: 10px;
+}
+
+.notification-label {
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.notification-button {
+    border-radius: 12px;
+    padding: 5px;
+}
+
+.notification-icon {
+    icon-size: 24px;
+    margin-left: 3px;
+    margin-right: 3px;
+}
+
+.notification-history-container {
+    background-color: transparent;
+    border-radius: 5px;
+    padding: 10px;
+    max-height: 300px; /* Ajustez selon vos besoins */
+    overflow-y: auto;
+    position: absolute;
+    bottom: 60px; /* Ajustez pour éviter la superposition avec le bouton de notification */
+    left: 20px;
+    right: 20px;
+}
+
+.time-label, .date-label {
+    font-size: 18px;
+    margin-bottom: 5px;
+    color: white;
+}
+
+.connexion-button {
+    background-color: #ffffff;
+    color: rgb(41, 35, 35);
+    border-radius: 5px;
+    padding: 5px 10px;
+    margin-bottom: 10px;
+    text-align: center;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
+.connexion-button:hover {
+    background-color: #45a049;
+    cursor: pointer;
+}
+
+/* Styles pour le conteneur de la barre de volume */
+.volume-slider-container {
+    background-color: #4c4c4c;
+    border-radius: 4px;
+    height: 24px;
+    margin-top: 10px;
+    margin-left: 10px;
+    margin-right: 10px;
+}
+
+/* Styles pour la barre de volume */
+.volume-slider {
+    background-color: #555;
+    height: 100%;
+    position: relative;
+}
+
+/* Styles pour l'indicateur de volume */
+.volume-indicator {
+    background-color: #d4d4d4;
+    height: 80%;
+    width: 0; /* Initialisé à 0, sera mis à jour dynamiquement */
+    transition: width 0.1s;
+    border-radius: 4px;
+}
+
+.pkeyboard-container {
+    padding: 10px;
+    background-color: #333;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+.pkeyboard-row {
+    margin-bottom: 5px;
+}
+
+.pkeyboard-container .button {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0;
+    margin: 0;
+    border-radius: 5px;
+    background-color: #555;
+    color: #fff;
+    font-size: 16px;
+    font-weight: bold;
+    text-align: center;
+    line-height: 36px;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    cursor: pointer;
+    transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.pkeyboard-container .button:hover {
+    background-color: #777;
+}
+
+.pkeyboard-container .button:active {
+    background-color: #444;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Styles pour le conteneur de la barre de recherche */
+.searchbar-container {
+    background-color: rgba(197, 197, 197, 0.658); /* Couleur de fond blanche */
+    border: 1px solid #e0e0e09f; /* Bordure légère pour délimiter la barre */
+    border-radius: 50px; /* Coins arrondis */
+    padding: 10px; /* Espacement intérieur */
+    margin: 10px; /* Espacement extérieur */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Ombre légère pour effet de profondeur */
+}
+
+/* Styles pour les icônes dans la barre de recherche */
+.searchbar-icon {
+    icon-size: 24px; /* Taille des icônes */
+    margin: 0 10px; /* Espacement horizontal autour des icônes */
+}
+
+/* Styles pour le texte dans la barre de recherche */
+.searchbar-text {
+    font-size: 14px; /* Taille de la police du texte */
+    color: #000000; /* Couleur du texte en noir */
+    margin: 0 10px; /* Espacement horizontal autour du texte */
+    margin-left: 20px;
+    margin-right: 20px;
+    margin-top: 3px;
+}
+
+.clock-container {
+    align-items: center;
+}
+
+.clock-label {
+    font-size: 100px; /* Taille de police pour l'heure */
+    font-weight: bold;
+    color: white;
+}
+
+.date-label {
+    font-size: 20px; /* Taille de police pour la date */
+    color: white;
+}
