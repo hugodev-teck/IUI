@@ -38,7 +38,9 @@ class MyDock {
         this.container = new St.BoxLayout({ style_class: 'my-dock-container' });
 
         this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`);
-        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dt.png`);
+        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dw.png`);
+        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/bt.png`);
+        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dc.png`);
         this.addAppIcon('firefox.desktop');
         this.addAppIcon('org.gnome.Terminal.desktop');
         this.addAppIcon('org.gnome.Nautilus.desktop');
@@ -49,7 +51,7 @@ class MyDock {
         Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
 
           // Se connecter au signal "notify::width" pour ajuster la position après que la taille soit définie
-          this.container.connect('notify::width', () => {
+          this.container.connect('notify::allocation', () => {
             this._setPosition();
         });
 
@@ -344,6 +346,8 @@ class NetworkSetting {
         let soundButtonPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon/volumewth.png`;
         let batteryButtonPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon/battery-fullwth.png`;
 
+        global.barReseau = this;
+
         this.wifiMenu = null;
         this.bleMenu = null;
 
@@ -372,7 +376,7 @@ class NetworkSetting {
         Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
 
         // Se connecter au signal "notify::width" pour ajuster la position après que la taille soit définie
-        this.container.connect('notify::width', () => {
+        this.container.connect('notify::allocation', () => {
             this._setPosition();
         });
 
@@ -454,12 +458,12 @@ class NetworkSetting {
         let primaryMonitor = Main.layoutManager.primaryMonitor;
         let containerWidth = this.container.width;
         let containerHeight = this.container.height;
-
-        let bottomOffset = 23;
-
-        let posX = primaryMonitor.width - containerWidth - 20;
-        let posY = primaryMonitor.height - containerHeight - bottomOffset;
-
+    
+        let topOffset = 23;
+    
+        let posX = primaryMonitor.x + primaryMonitor.width - containerWidth - 20;
+        let posY = primaryMonitor.y + topOffset;
+    
         this.container.set_position(posX, posY);
     }
 
@@ -495,8 +499,10 @@ class NetworkSetting {
     async _wifimenu() {
         let menuwfWidth = 280;
         let menuwfHeight = 310;
-        let menuwfX = Math.floor((Main.layoutManager.primaryMonitor.width - menuwfWidth) - 20);
-        let menuwfY = Math.floor((Main.layoutManager.primaryMonitor.height - menuwfHeight) - 135);
+        let menuwfX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuwfWidth) - 20);
+        
+        let topOffset = 110;
+        let menuwfY = Main.layoutManager.primaryMonitor.y + topOffset;
     
         let menuwf = new St.BoxLayout({
             vertical: true,
@@ -575,11 +581,13 @@ class NetworkSetting {
     }
     
     async _blemenu() {
-        // Dimensions et positions
         let menubleWidth = 280;
         let menubleHeight = 310;
-        let menubleX = Math.floor((Main.layoutManager.primaryMonitor.width - menubleWidth) - 20);
-        let menubleY = Math.floor((Main.layoutManager.primaryMonitor.height - menubleHeight) - 135);
+        let menubleX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menubleWidth) - 20);
+        
+        let topOffset = 110;
+        let menubleY = Main.layoutManager.primaryMonitor.y + topOffset;
+        
     
         // Vérifier l'état du service Bluetooth
         let serviceActive = await this.isBluetoothServiceActive();
@@ -823,8 +831,10 @@ class NetworkSetting {
         // Dimensions et positions
         let menuWidth = 280;
         let menuHeight = 310;
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
-        let menuY = Math.floor((Main.layoutManager.primaryMonitor.height - menuHeight) - 135);
+        let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
+
+        let topOffset = 110;
+        let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
     
         // Création du menu Volume
         let volumeMenu = new St.BoxLayout({
@@ -978,8 +988,10 @@ class NetworkSetting {
         // Dimensions et positions
         let menuWidth = 280;
         let menuHeight = 310;
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
-        let menuY = Math.floor((Main.layoutManager.primaryMonitor.height - menuHeight) - 135);
+        let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
+
+        let topOffset = 110;
+        let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
     
         // Création du menu d'accessibilité
         let menu = new St.BoxLayout({
@@ -1098,8 +1110,10 @@ class NetworkSetting {
     _handleBarClick() {
         let menunetWidth = 267;
         let menunetHeight = 420;
-        let menunetX = Math.floor((Main.layoutManager.primaryMonitor.width - menunetWidth) - 20);
-        let menunetY = Math.floor((Main.layoutManager.primaryMonitor.height - menunetHeight) - 135);
+        let menunetX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menunetWidth) - 20);
+    
+        let topOffset = 110;
+        let menunetY = Main.layoutManager.primaryMonitor.y + topOffset;
     
         let menunet = new St.BoxLayout({
             vertical: true,

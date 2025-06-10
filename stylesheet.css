@@ -358,7 +358,6 @@
     border: 1px solid #e0e0e09f; /* Bordure légère pour délimiter la barre */
     border-radius: 50px; /* Coins arrondis */
     padding: 10px; /* Espacement intérieur */
-    margin: 10px; /* Espacement extérieur */
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* Ombre légère pour effet de profondeur */
 }
 
@@ -379,7 +378,7 @@
 }
 
 .clock-container {
-    align-items: center;
+    min-height: 120px;
 }
 
 .clock-label {
@@ -391,4 +390,22 @@
 .date-label {
     font-size: 20px; /* Taille de police pour la date */
     color: white;
+}
+
+.search-overlay {
+    background-color: rgba(100, 100, 100, 0.9);
+    border-radius: 10px;
+    padding: 10px;
+}
+
+.searchbar-entry {
+    padding: 8px;
+    font-size: 14px;
+    border-radius: 6px;
+    background-color: white;
+    color: black;
+}
+
+.searchbar-results {
+    margin-top: 10px;
 }

@@ -39,7 +39,9 @@ var TimeMachine = GObject.registerClass(
             Main.layoutManager._backgroundGroup.set_child_below_sibling(this.clockContainer, null);
 
             // Positionner le conteneur initialement
-            this._setPosition();
+            this.clockContainer.connect('notify::allocation', () => {
+                this._setPosition();
+            });
 
             // Mettre à jour l'heure et la date toutes les 60 secondes
             this._updateClock();
@@ -82,14 +84,23 @@ var TimeMachine = GObject.registerClass(
         }
 
         _setPosition() {
+            if (!this.clockContainer) return;
+        
             let monitor = Main.layoutManager.primaryMonitor;
-
-            // Centrer horizontalement
-            let centerX = Math.floor((monitor.width / 2) - (this.clockContainer.width / 2));
-            let posY = Math.floor((monitor.width / 10)); // Position verticale (par exemple, 10 pixels du haut de l'écran)
-
+            if (!monitor) return;
+        
+            let containerWidth = this.clockContainer.width;
+            let containerHeight = this.clockContainer.height;
+        
+            // ATTENTION : il arrive que width/height soient 0 au tout début
+            if (containerWidth === 0 || containerHeight === 0)
+                return; // on fait rien si pas encore prêt
+        
+            let centerX = Math.floor((monitor.width - containerWidth) / 2);
+            let posY = Math.floor((monitor.height / 6)); // attention ici aussi : c'était height pas width
+        
             this.clockContainer.set_position(centerX, posY);
-        }
+        }        
 
         destroy() {
             this.clockContainer.destroy();

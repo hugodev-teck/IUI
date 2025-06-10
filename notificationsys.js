@@ -74,14 +74,20 @@ var NotificationManager = class NotificationManager {
 
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
-        let bottomOffset = 25;
-
-        // Calculer la position horizontale centrale
-        let centerX = 20;
-        let posY = monitor.height - this.notificationBox.height - bottomOffset;
-
-        // Ajuster la position du conteneur
-        this.notificationBox.set_position(centerX, posY);
+        let topOffset = 23;
+        let horizontalOffset = 10;
+    
+        // Supposons que tu as accès à la barre réseau
+        let barReseau = global.barReseau; // À exposer depuis l'autre constructeur
+        let barX = barReseau.container.x;
+    
+        // Position horizontale : à gauche de la barre réseau avec un offset
+        let posX = barX - this.notificationBox.width - horizontalOffset;
+    
+        // Position verticale : même top offset que la barre réseau
+        let posY = monitor.y + topOffset;
+    
+        this.notificationBox.set_position(posX, posY);
     }
 
     _toggleNotificationHistory() {
