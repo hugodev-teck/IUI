@@ -1,3 +1,10 @@
+/*                                                                */
+/*       Copyright (c) Project PRISM. All rights reserved.        */
+/*         This software is licensed under the CC BY-NC           */
+/*          Full text of the license can be found at              */
+/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                                                                */
+
 const { St, GLib, Gio, Clutter } = imports.gi;
 const Main = imports.ui.main;
 const ExtensionUtils = imports.misc.extensionUtils;
@@ -7,7 +14,7 @@ var NotificationManager = class NotificationManager {
     constructor() {
         this.notifications = [];
 
-        // Conteneur de notifications temporaires
+        // Conteneur de notifications temporaires (pop-up)
         this.notificationContainer = new St.BoxLayout({
             vertical: true,
             style_class: 'notification-container'
@@ -56,7 +63,6 @@ var NotificationManager = class NotificationManager {
         // Ajouter le conteneur au groupe backgroundGroup
         Main.layoutManager._backgroundGroup.add_child(this.notificationBox);
 
-        // Réordonner les enfants pour placer le conteneur en arrière-plan
         Main.layoutManager._backgroundGroup.set_child_below_sibling(this.notificationBox, null);
     
         this.notificationBox.connect('notify::width', () => {
@@ -77,14 +83,18 @@ var NotificationManager = class NotificationManager {
         let topOffset = 23;
         let horizontalOffset = 10;
     
-        // Supposons que tu as accès à la barre réseau
-        let barReseau = global.barReseau; // À exposer depuis l'autre constructeur
+        let barReseau = global.barReseau; 
+        
+        if (!barReseau || !barReseau.container) {
+             let posX = monitor.x + monitor.width - this.notificationBox.width - horizontalOffset;
+             let posY = monitor.y + topOffset;
+             this.notificationBox.set_position(posX, posY);
+             return;
+        }
+        
         let barX = barReseau.container.x;
     
-        // Position horizontale : à gauche de la barre réseau avec un offset
         let posX = barX - this.notificationBox.width - horizontalOffset;
-    
-        // Position verticale : même top offset que la barre réseau
         let posY = monitor.y + topOffset;
     
         this.notificationBox.set_position(posX, posY);
@@ -103,49 +113,120 @@ var NotificationManager = class NotificationManager {
         // Vider le conteneur d'historique avant de le remplir
         this.historyContainer.remove_all_children();
 
-        // Ajouter chaque notification de l'historique au conteneur
-        this.notifications.forEach(notification => {
+        // Ajout du titre de l'historique
+        let historyTitle = new St.Label({
+            text: 'Historique des Notifications',
+            style_class: 'notification-history-title'
+        });
+        this.historyContainer.add_child(historyTitle);
 
-            let boxWidth = 400;
-            let boxHeight = 55;
+        // CORRECTION 1: Utiliser .slice().reverse() pour éviter de modifier le tableau this.notifications
+        this.notifications.slice().reverse().forEach(notification => { 
+            const { title, message, appName, iconUrl } = notification;
 
-            // Créer la boîte de notification
             let notificationBox = new St.BoxLayout({
                 vertical: true,
-                style_class: 'notification-box'
+                style_class: 'notification-box',
+                style: 'width: 400px; padding: 5px; margin-bottom: 5px;' 
             });
 
-            notificationBox.set_size(boxWidth, boxHeight);
+            let headerBox = new St.BoxLayout({
+                vertical: false,
+                style_class: 'notification-header-box'
+            });
+
+            if (iconUrl) {
+                try {
+                    let appIcon = new St.Icon({
+                        gicon: Gio.icon_new_for_string(iconUrl),
+                        icon_size: 16,
+                        style_class: 'notification-app-icon'
+                    });
+                    headerBox.add_child(appIcon);
+                } catch (e) {
+                    log(`Erreur lors du chargement de l'icône pour ${appName}: ${e.message}`);
+                }
+            }
+
+            let appNameLabel = new St.Label({
+                text: appName || 'Application Inconnue',
+                style_class: 'notification-app-name'
+            });
+            headerBox.add_child(appNameLabel);
+            notificationBox.add_child(headerBox);
 
             let notificationLabel = new St.Label({
-                text: `${notification.title}\n${notification.message}`,
+                text: `${title}\n${message}`,
                 style_class: 'notification-label'
             });
-
             notificationBox.add_child(notificationLabel);
-
             this.historyContainer.add_child(notificationBox);
         });
+        
+        // Définir les marges demandées
+        const MARGIN_LEFT = 10;
+        const MARGIN_TOP = 23;
+        const HISTORY_MAX_WIDTH = 420;
+
+        // 1. Forcer le calcul de la hauteur (inchangé)
+        let [minHeight, natHeight] = this.historyContainer.get_preferred_height(HISTORY_MAX_WIDTH);
+        let historyHeight = natHeight; 
+        
+        // 2. Appliquer la taille (inchangé)
+        this.historyContainer.set_size(HISTORY_MAX_WIDTH, historyHeight); 
+        
+        // 3. Définir les nouvelles positions absolues par rapport au moniteur principal
+        let monitor = Main.layoutManager.primaryMonitor;
+        
+        let posX = monitor.x + MARGIN_LEFT;
+        let posY = monitor.y + MARGIN_TOP; 
+        
+        // Appliquer la position
+        this.historyContainer.set_position(posX, posY);
     }
 
-    showNotification(title, message) {
+    /**
+     * Affiche une notification temporaire et l'ajoute à l'historique.
+     */
+    showNotification(title, message, appName = 'Système', iconUrl = null) {
         log('une notification doit apparaitre');
 
-        // Ajouter la notification à l'historique
-        this.notifications.push({ title, message });
+        this.notifications.push({ title, message, appName, iconUrl });
 
-        let boxWidth = 400;
-        let boxHeight = 55;
+        const boxWidth = 400; 
 
-        // Créer la boîte de notification
         let notificationBox = new St.BoxLayout({
             vertical: true,
-            style_class: 'notification-box'
+            style_class: 'notification-box',
+            style: `width: ${boxWidth}px;` // Fixer la largeur par style
         });
 
-        notificationBox.set_size(boxWidth, boxHeight);
+        let headerBox = new St.BoxLayout({
+            vertical: false,
+            style_class: 'notification-header-box'
+        });
 
-        // Créer le label avec le message
+        if (iconUrl) {
+            try {
+                let appIcon = new St.Icon({
+                    gicon: Gio.icon_new_for_string(iconUrl),
+                    icon_size: 16,
+                    style_class: 'notification-app-icon'
+                });
+                headerBox.add_child(appIcon);
+            } catch (e) {
+                log(`Erreur lors du chargement de l'icône pour ${appName} (temp): ${e.message}`);
+            }
+        }
+
+        let appNameLabel = new St.Label({
+            text: appName,
+            style_class: 'notification-app-name'
+        });
+        headerBox.add_child(appNameLabel);
+        
+        notificationBox.add_child(headerBox);
+
         let notificationLabel = new St.Label({
             text: `${title}\n${message}`,
             style_class: 'notification-label'
@@ -153,7 +234,6 @@ var NotificationManager = class NotificationManager {
 
         notificationBox.add_child(notificationLabel);
 
-        // Ajouter la boîte au conteneur de notifications temporaires
         this.notificationContainer.add_child(notificationBox);
         this.notificationContainer.show();
 
@@ -163,18 +243,15 @@ var NotificationManager = class NotificationManager {
             if (this.notificationContainer.get_n_children() === 0) {
                 this.notificationContainer.hide();
             }
-            return GLib.SOURCE_REMOVE; // Arrêter la temporisation
+            return GLib.SOURCE_REMOVE; 
         });
     }
 
     _setupNotificationListener() {
         log('setup ok');
         let source = new Clutter.Actor();
-        source.connect('notify::message', (actor, property) => {
-            log(`Notification received: ${property}`);
-            let [summary, body] = property.split('\n');
-            this.showNotification(summary, body);
-        });
+        // Si vous connectez un signal 'message' avec le format "Title::Message::AppName::IconUrl",
+        // vous devrez adapter le code ici pour extraire les 4 arguments et appeler this.showNotification().
     }
     
 };
@@ -184,11 +261,17 @@ function init() {
 }
 
 function enable() {
-    // Crée une instance de NotificationManager lorsque l'extension est activée
     global.notificationManager = new NotificationManager();
 }
 
 function disable() {
-    // Code pour désactiver l'extension ici
+    if (global.notificationManager) {
+        // Nettoyage complet
+        Main.layoutManager.removeChrome(global.notificationManager.notificationContainer);
+        Main.layoutManager.removeChrome(global.notificationManager.historyContainer);
+        if (global.notificationManager.notificationBox.get_parent()) {
+             global.notificationManager.notificationBox.get_parent().remove_child(global.notificationManager.notificationBox);
+        }
+    }
     global.notificationManager = null;
 }

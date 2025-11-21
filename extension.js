@@ -1,5 +1,21 @@
+/*     ######  ######  ###  #####  #     #      ### #     # ###   */
+/*     #     # #     #  #  #     # ##   ##       #  #     #  #    */
+/*     #     # #     #  #  #       # # # #       #  #     #  #    */
+/*     ######  ######   #   #####  #  #  #       #  #     #  #    */
+/*     #       #   #    #        # #     #       #  #     #  #    */
+/*     #       #    #   #  #     # #     #       #  #     #  #    */
+/*     #       #     # ###  #####  #     #      ###  #####  ###   */
+/*                                                                */
+/*       Copyright (c) Project PRISM. All rights reserved.        */
+/*         This software is licensed under the CC BY-NC           */
+/*          Full text of the license can be found at              */
+/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                                                                */
+
+
 const NM = imports.gi.NM;
-const { St, Clutter, GLib } = imports.gi;
+const UPowerGlib = imports.gi.UPowerGlib;
+const { St, Clutter, GLib, GObject } = imports.gi;
 const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
@@ -14,6 +30,17 @@ const { ByteArray } = imports.byteArray;
 const Gio = imports.gi.Gio;
 const Gtk = imports.gi.Gtk;
 const Gdk = imports.gi.Gdk;
+const Slider = imports.ui.slider;
+const Mainloop = imports.mainloop;
+const BoxPointer = imports.ui.boxpointer;
+const Meta = imports.gi.Meta;
+const Shell = imports.gi.Shell;
+const Gvc = imports.gi.Gvc;
+const ModalDialog = imports.ui.modalDialog;
+const Soup = imports.gi.Soup;
+
+const BINDING_NAME = 'toggle-overview';
+const DUMMY_KEY = 'super-block';
 
 let searchBar;
 let pollingId;
@@ -27,23 +54,30 @@ let wifiMenu = null;
 let bleMenu = null;
 let Volmenu = null;
 let Accesmenu = null;
+let superBlock = null;
+let closeOverviewTimeout = null;
 let monitor;
+let hoverTimer;
 
 class MyDock {
     constructor() {
+        this.settings = ExtensionUtils.getSettings('org.gnome.shell.extensions.pdock');
         this._constructbar();
         
     }
     _constructbar(){
         this.container = new St.BoxLayout({ style_class: 'my-dock-container' });
 
-        this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`);
-        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dw.png`);
-        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/bt.png`);
-        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dc.png`);
-        this.addAppIcon('firefox.desktop');
-        this.addAppIcon('org.gnome.Terminal.desktop');
-        this.addAppIcon('org.gnome.Nautilus.desktop');
+        this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`, "Menu principal");
+        this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dt.png`, "DeskTools");
+
+        // Charger les applis depuis les préférences
+        let apps = this.settings.get_strv('dock-apps');
+        for (let desktop of apps) {
+            this.addAppIcon(desktop);
+        }
+        
+        this._addAddButton();
         // Ajouter le conteneur au groupe backgroundGroup
         Main.layoutManager._backgroundGroup.add_child(this.container);
 
@@ -55,9 +89,298 @@ class MyDock {
             this._setPosition();
         });
 
+        this.tooltip = new St.Label({
+            style_class: 'dock-tooltip',
+            text: '',
+            opacity: 0,
+            visible: false,
+        });
+        Main.layoutManager._backgroundGroup.add_child(this.tooltip);
+
+        
+
         // Initialement positionner le conteneur
         this._setPosition();
     }
+
+    addCustomIconMenu(iconPath, labelText = '') {
+        let icon = new St.Button({ style_class: 'app-icon' });
+        let fileIcon = new Gio.FileIcon({ file: Gio.File.new_for_path(iconPath) });
+        let iconImage = new St.Icon({ gicon: fileIcon, icon_size: 50 });
+        icon.set_child(iconImage);
+
+        let pressStartTime = null;
+        const longPressDuration = 3000;
+
+        icon.connect('button-press-event', (actor, event) => {
+            if (event.get_button() === 1) pressStartTime = Date.now();
+        });
+
+        icon.connect('button-release-event', (actor, event) => {
+            if (event.get_button() === 1 && pressStartTime) {
+                let pressDuration = Date.now() - pressStartTime;
+                pressStartTime = null;
+                if (pressDuration >= longPressDuration) {
+                    this._shutdownPC();
+                } else {
+                    if (menu) {
+                        menu.destroy();
+                        menu = null;
+                        if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                            global.networkSetting._closeAllMenus();
+                        }
+                    } else {
+                        menu = this._openAppMenu();
+                        if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                            global.networkSetting._closeAllMenus();
+                        }
+                    }
+                }
+            }
+
+            if (event.get_button() === 3) {
+                // Action : Ajuster la fenêtre active
+                if (global.networkSetting) {
+                    global.networkSetting._fitWindowToDock();
+                }
+            }
+        });
+
+        if (labelText) {
+            icon.connect('enter-event', () => this._showTooltip(labelText, icon));
+            icon.connect('leave-event', () => this._hideTooltip());
+        }
+
+        this.container.add_child(icon);
+    }
+
+    _showTooltip(text, icon) {
+        this.tooltip.set_text(text);
+        this.tooltip.show();
+
+        // Positionner le label au-dessus du bouton
+        let [x, y] = icon.get_transformed_position();
+        let iconWidth = icon.width;
+        let tooltipWidth = this.tooltip.width;
+        let tooltipHeight = this.tooltip.height;
+
+        // centré horizontalement sur l'icône
+        let posX = x + (iconWidth / 2) - (tooltipWidth / 2);
+        // juste au-dessus du bouton
+        let posY = y - tooltipHeight - 20;
+
+        this.tooltip.set_position(posX, posY);
+
+        // petite animation d’apparition
+        this.tooltip.opacity = 0;
+        this.tooltip.ease({
+            opacity: 255,
+            duration: 150,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+    }
+
+    _hideTooltip() {
+        if (!this.tooltip.visible)
+            return;
+
+        this.tooltip.ease({
+            opacity: 0,
+            duration: 100,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => {
+                this.tooltip.hide();
+            },
+        });
+    }
+
+    _addAddButton() {
+        let labelText = 'Ajouter/Supprimer des applications';
+        this.addButton = new St.Button({ style_class: 'app-icon' });
+        this._updateAddIcon();
+
+        this.addButton.connect('clicked', () => this._onAddButtonClicked());
+
+        // Tooltip au survol
+        if (labelText) {
+            this.addButton.connect('enter-event', () => {
+                this._showTooltip(labelText, this.addButton);
+            });
+            this.addButton.connect('leave-event', () => {
+                this._hideTooltip();
+            });
+        }
+
+        this.container.add_child(this.addButton);
+    }
+
+    _updateAddIcon() {
+        const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
+        let icon = new St.Icon({ icon_name: iconName, icon_size: 40 });
+        this.addButton.set_child(icon);
+
+        // Visuel pour les icônes en mode édition (suppression)
+        let children = this.container.get_children();
+        for (let child of children) {
+            // Ne pas toucher le bouton "+"
+            if (child === this.addButton)
+                continue;
+
+            if (this._editMode)
+                child.add_style_class_name('edit-mode-app');
+            else
+                child.remove_style_class_name('edit-mode-app');
+        }
+    }
+
+    _onAddButtonClicked() {
+        if (menu) {
+            menu.destroy();
+            menu = null;
+        }
+        if (global.networkSetting && global.networkSetting._closeAllMenus) {
+            global.networkSetting._closeAllMenus();
+        }
+        // Si on est en mode suppression, le désactive
+        if (this._editMode) {
+            this._editMode = false;
+            this._updateAddIcon();
+            return;
+        }
+
+        // Sinon, ouvrir le menu d’ajout
+        this._openAppChooser();
+    }
+
+    _openAppChooser() {
+        if (this.popupMenu) {
+            this.popupMenu.destroy();
+            this.popupMenu = null;
+            return;
+        }
+
+        // Créer un conteneur pour le menu
+        this.popupMenu = new St.BoxLayout({
+            vertical: true,
+            style_class: 'app-chooser-menu',
+            reactive: true,
+            can_focus: true
+        });
+        Main.uiGroup.add_child(this.popupMenu);
+
+        // Récupérer la position du bouton
+        let [bx, by] = this.addButton.get_transformed_position();
+        let buttonWidth = this.addButton.width;
+        let buttonHeight = this.addButton.height;
+        let menuWidth = 240;
+        let menuHeight = 400;
+        let margin = 20;
+
+        // Calcul de la position centrée juste au-dessus
+        let posX = bx + (buttonWidth / 2) - (menuWidth / 2);
+        let posY = by - menuHeight - margin;
+
+        // Si le menu dépasse en haut de l’écran, on ajuste
+        if (posY < 10) posY = 10;
+
+        // Application du positionnement et dimensions
+        this.popupMenu.set_position(posX, posY);
+        this.popupMenu.set_size(menuWidth, menuHeight);
+
+        // Option : mode suppression
+        let editItem = new St.Button({
+            label: "🗑️ Passer en mode suppression",
+            style_class: 'app-chooser-item'
+        });
+        editItem.connect('clicked', () => {
+            this._editMode = true;
+            this._updateAddIcon();
+            this.popupMenu.destroy();
+            this.popupMenu = null;
+        });
+        this.popupMenu.add_child(editItem);
+
+        let VerItem = new St.Button({
+            label: "💻 Afficher les infos",
+            style_class: 'app-chooser-item'
+        });
+        VerItem.connect('clicked', () => {
+            let dialog = new AboutDialog();
+            dialog.open();
+            this.popupMenu.destroy();
+            this.popupMenu = null;
+        });
+        this.popupMenu.add_child(VerItem);
+
+        // Séparateur
+        let sep = new St.Label({ text: '───────────────' });
+        this.popupMenu.add_child(sep);
+
+        // Liste des applis
+        let scroll = new St.ScrollView({
+            style_class: 'app-chooser-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC
+        });
+        let list = new St.BoxLayout({ vertical: true });
+        scroll.add_actor(list);
+        this.popupMenu.add_child(scroll);
+
+        let allApps = Gio.AppInfo.get_all()
+            .filter(a => a.should_show())
+            .sort((a, b) => a.get_name().localeCompare(b.get_name()));
+
+        for (let app of allApps.slice(0, 150)) {
+            let item = new St.Button({ style_class: 'app-chooser-item' });
+            let row = new St.BoxLayout({ vertical: false });
+
+            let icon = new St.Icon({
+                gicon: app.get_icon(),
+                icon_size: 20,
+                style_class: 'app-chooser-icon'
+            });
+
+            let label = new St.Label({
+                text: app.get_name(),
+                y_align: Clutter.ActorAlign.CENTER
+            });
+
+            row.add_child(icon);
+            row.add_child(label);
+            item.set_child(row);
+
+            item.connect('clicked', () => {
+                this._addApp(app.get_id());
+                this.popupMenu.destroy();
+                this.popupMenu = null;
+            });
+
+            list.add_child(item);
+        }
+
+        // Fermer le menu si on clique ailleurs
+        this._globalClickHandler = global.stage.connect('button-press-event', () => {
+            if (this.popupMenu) {
+                this.popupMenu.destroy();
+                this.popupMenu = null;
+            }
+            if (this._globalClickHandler) {
+                global.stage.disconnect(this._globalClickHandler);
+                this._globalClickHandler = null;
+            }
+        });
+    }
+
+
+    _addApp(desktopFile) {
+        let apps = this.settings.get_strv('dock-apps');
+        if (!apps.includes(desktopFile)) {
+            apps.push(desktopFile);
+            this.settings.set_strv('dock-apps', apps);
+            this.addAppIcon(desktopFile);
+        }
+    }
+
 
     addAppIcon(desktopFile) {
         let appInfo = Gio.DesktopAppInfo.new(desktopFile);
@@ -69,70 +392,258 @@ class MyDock {
         let icon = new St.Button({ style_class: 'app-icon' });
         let gicon = appInfo.get_icon();
         let iconImage = new St.Icon({ gicon: gicon, icon_size: 50 });
-
         icon.set_child(iconImage);
 
+        // tooltip
+        icon.connect('enter-event', () => {
+            this._showTooltip(appInfo.get_name(), icon);
+        });
+        icon.connect('leave-event', () => {
+            this._hideTooltip();
+        });
+
+        // click normal / edit mode
         icon.connect('clicked', () => {
-            appInfo.launch([], null);
-        });
+            this._hideTooltip();
 
-        this.container.add_child(icon);
-    }
-
-    addCustomIconMenu(iconPath) {
-        let icon = new St.Button({
-            style_class: 'app-icon'
-        });
-
-        let fileIcon = new Gio.FileIcon({ file: Gio.File.new_for_path(iconPath) });
-        let iconImage = new St.Icon({
-            gicon: fileIcon,
-            icon_size: 50
-        });
-
-        icon.set_child(iconImage);
-
-        let pressStartTime = null;
-        const longPressDuration = 3000; // 3 secondes en millisecondes
-
-        icon.connect('button-press-event', (actor, event) => {
-            if (event.get_button() === 1) { // Vérifie si le bouton gauche est pressé
-                pressStartTime = Date.now(); // Marquer le début de l'appui
+            if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                global.networkSetting._closeAllMenus();
             }
-        });
 
-        icon.connect('button-release-event', (actor, event) => {
-            if (event.get_button() === 1 && pressStartTime) {
-                let pressDuration = Date.now() - pressStartTime; // Calculer la durée de l'appui
-                pressStartTime = null; // Réinitialiser le temps d'appui
-
-                if (pressDuration >= longPressDuration) {
-                    // Éteindre le PC après un appui prolongé
-                    this._shutdownPC();
-                } else {
-                    // Exécuter l'action normale si l'appui est court
-                    if (menu) {
-                        menu.destroy();
-                        menu = null;
-                    } else {
-                        menu = this._openAppMenu();
-                    }
+            if (this._editMode) {
+                this._removeApp(desktopFile, icon);
+            } else {
+                if (menu) {
+                    menu.destroy();
+                    menu = null;
                 }
+                appInfo.launch([], null);
             }
         });
 
-        this.container.add_child(icon);
+        // Hover long -> afficher liste des fenêtres (5s)
+        let hoverTimer = null;
+        icon.connect('enter-event', () => {
+            // start timer only if not editing
+            if (this._editMode) return;
+
+            // safety remove existing
+            if (hoverTimer) {
+                try { GLib.Source.remove(hoverTimer); } catch(e) {}
+                hoverTimer = null;
+            }
+
+            hoverTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                this._showWindowList(appInfo, icon);
+                hoverTimer = null;
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+
+        icon.connect('leave-event', () => {
+            // cancel timer if leaving before 5s
+            if (hoverTimer) {
+                try { GLib.Source.remove(hoverTimer); } catch(e) {}
+                hoverTimer = null;
+            }
+        });
+
+        // insert before the add button so + stays last
+        if (this.addButton) {
+            let index = this.container.get_children().indexOf(this.addButton);
+            if (index === -1)
+                this.container.add_child(icon);
+            else
+                this.container.insert_child_at_index(icon, index);
+        } else {
+            this.container.add_child(icon);
+        }
     }
+
+    _removeApp(desktopFile, iconButton) {
+    let apps = this.settings.get_strv('dock-apps') || [];
+    apps = apps.filter(a => a !== desktopFile);
+    this.settings.set_strv('dock-apps', apps);
+
+    if (iconButton && iconButton.get_parent && iconButton.get_parent()) {
+        try {
+            iconButton.destroy();
+        } catch (e) {
+            log('Erreur en détruisant l\'icône : ' + e);
+        }
+    } else {
+        let children = this.container.get_children();
+        for (let child of children) {
+        }
+    }
+}
+
+    _showWindowList(appInfo, iconActor) {
+        // --- Fermer un ancien popup proprement ---
+        if (this.windowListPopup) {
+            try { this.windowListPopup.destroy(); } catch (e) {}
+            this.windowListPopup = null;
+        }
+
+        if (!this._popupState) this._popupState = {};
+        const appId = appInfo?.get_id?.() || appInfo?.get_name?.() || 'unknown';
+        this._popupState[appId] = { insidePopup: false, insideIcon: true };
+
+        // --- Récupérer les fenêtres associées ---
+        let allWindows = global.get_window_actors().map(a => a.meta_window);
+        let windows = allWindows.filter(w => {
+            try {
+                let wm = (w.get_wm_class && w.get_wm_class())?.toLowerCase?.() || '';
+                let title = (w.get_title && w.get_title())?.toLowerCase?.() || '';
+                let id = appId.toLowerCase();
+                return wm.includes(id) || title.includes(appInfo.get_name().toLowerCase());
+            } catch (e) { return false; }
+        });
+
+        if (windows.length === 0) return;
+
+        // --- Créer le popup ---
+        let popup = new St.BoxLayout({
+            vertical: true,
+            style_class: 'window-list-popup',
+            reactive: true,
+            can_focus: true,
+            track_hover: true,
+        });
+
+        // --- Ajouter les fenêtres ---
+        for (let w of windows) {
+            let row = new St.BoxLayout({ vertical: false, style_class: 'window-list-item' });
+
+            let label = new St.Label({
+                text: w.get_title() || 'Sans titre',
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+            });
+
+            row.connect('button-press-event', () => {
+                try { w.activate(global.get_current_time()); } catch (e) {}
+                this._hideWindowList();
+            });
+
+            // Bouton fermer
+            let closeBtn = new St.Button({
+                style_class: 'window-close-btn',
+                reactive: true,
+                can_focus: true,
+                track_hover: true,
+            });
+            let closeIcon = new St.Label({
+                text: '✕',
+                style: 'font-size: 14px; font-weight: bold; color: #ff5555;',
+            });
+            closeBtn.set_child(closeIcon);
+
+            closeBtn.connect('button-press-event', () => {
+                try {
+                    if (w.delete) w.delete(global.get_current_time());
+                    else if (w.request_close) w.request_close();
+                    else if (w.kill) w.kill(global.get_current_time());
+                } catch (err) { logError(err, 'Erreur fermeture fenêtre'); }
+
+                try { row.destroy(); } catch (e) {}
+
+                // Si plus de lignes → fermer popup après un petit délai
+                Mainloop.timeout_add(200, () => {
+                    if (popup.get_n_children() === 0)
+                        this._hideWindowList();
+                    return false;
+                });
+            });
+
+            row.add_child(label);
+            row.add_child(closeBtn);
+            popup.add_child(row);
+        }
+
+        Main.uiGroup.add_child(popup);
+        this.windowListPopup = popup;
+
+        // --- Position du popup ---
+        Mainloop.idle_add(() => {
+            try {
+                let [bx, by] = iconActor.get_transformed_position();
+                let bw = iconActor.width || 0;
+                let pw = popup.width;
+                let ph = popup.height;
+
+                let posX = Math.floor(bx + (bw / 2) - (pw / 2));
+                let posY = Math.floor(by - ph - 8);
+
+                let m = Main.layoutManager.primaryMonitor;
+                posX = Math.max(8, Math.min(m.width - pw - 8, posX));
+                posY = Math.max(8, posY);
+
+                popup.set_position(posX, posY);
+                popup.raise_top();
+
+                popup.opacity = 0;
+                popup.ease({
+                    opacity: 255,
+                    duration: 150,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                });
+            } catch (e) { log('_showWindowList position error: ' + e); }
+            return false;
+        });
+
+        // --- Garde le menu visible tant que la souris est dedans ---
+        const state = this._popupState[appId];
+        const hideIfOutside = () => {
+            if (!state.insidePopup && !state.insideIcon)
+                this._hideWindowList();
+        };
+
+        iconActor.connect('enter-event', () => state.insideIcon = true);
+        iconActor.connect('leave-event', () => {
+            state.insideIcon = false;
+            Mainloop.timeout_add(150, hideIfOutside);
+        });
+
+        popup.connect('enter-event', () => state.insidePopup = true);
+        popup.connect('leave-event', () => {
+            state.insidePopup = false;
+            Mainloop.timeout_add(150, hideIfOutside);
+        });
+    }
+
+    _hideWindowList() {
+        if (this.windowListPopup) {
+            try {
+                this.windowListPopup.ease({
+                    opacity: 0,
+                    duration: 120,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                    onComplete: () => {
+                        try { this.windowListPopup.destroy(); } catch (e) {}
+                        this.windowListPopup = null;
+                    },
+                });
+            } catch (e) {
+                try { this.windowListPopup.destroy(); } catch (e2) {}
+                this.windowListPopup = null;
+            }
+        }
+    }
+
 
     _shutdownPC() {
         // Commande pour éteindre le PC
         GLib.spawn_command_line_async('systemctl poweroff');
     }
 
-    addCustomIcon(iconPath) {
+    addCustomIcon(iconPath, labelText = '') {
+        const GLib = imports.gi.GLib;
+        const Gio = imports.gi.Gio;
+        const St = imports.gi.St;
+
         let icon = new St.Button({ style_class: 'app-icon' });
 
-        // Utiliser un chemin d'accès pour charger l'image PNG
         let fileIcon = new Gio.FileIcon({ file: Gio.File.new_for_path(iconPath) });
         let iconImage = new St.Icon({
             gicon: fileIcon,
@@ -141,18 +652,37 @@ class MyDock {
 
         icon.set_child(iconImage);
 
-        // Ajouter une action ouvrir un menu par exemple
         icon.connect('clicked', () => {
-            // Implémenter l'action souhaitée ici
+            let appImagePath = `${ExtensionUtils.getCurrentExtension().path}/System/Program(x64)/Desktools-1.6.6.AppImage`;
+            if (menu) {
+                menu.destroy();
+                menu = null;
+            }   
+            if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                global.networkSetting._closeAllMenus();
+            }
+            try {
+                GLib.spawn_command_line_async(`"${appImagePath}"`);
+            } catch (e) {
+                log(`Erreur lors du lancement de l'AppImage : ${e}`);
+            }
         });
 
-        // Insérer au début du container
+        if (labelText) {
+            icon.connect('enter-event', () => {
+                this._showTooltip(labelText, icon);
+            });
+            icon.connect('leave-event', () => {
+                this._hideTooltip();
+            });
+        }
+
         this.container.insert_child_at_index(icon, 1);
     }
 
     _openAppMenu() {
-        let menuWidth = Math.floor(Main.layoutManager.primaryMonitor.width * 0.25);
-        let menuHeight = Math.floor(Main.layoutManager.primaryMonitor.height * 0.75);
+        let menuWidth = Math.floor(Main.layoutManager.primaryMonitor.width * 0.35);
+        let menuHeight = Math.floor(Main.layoutManager.primaryMonitor.height * 0.65);
         let menuX = Math.floor((Main.layoutManager.primaryMonitor.width - menuWidth) / 2);
         let menuY = Math.floor((Main.layoutManager.primaryMonitor.height - menuHeight) / 2);
     
@@ -217,7 +747,6 @@ class MyDock {
                 appItems.push({ header, type: 'header', visible: true }); // Ajouter l'en-tête à la liste d'éléments
             }
     
-            // Créer un conteneur pour chaque application
             let appBox = new St.BoxLayout({
                 style_class: 'app-box',
                 reactive: true,
@@ -250,7 +779,6 @@ class MyDock {
             appItems.push({ appBox, appInfo, type: 'app', visible: true }); // Ajouter l'application à la liste d'éléments
         });
     
-        // Filtrer les applications en fonction de la recherche
         searchEntry.get_clutter_text().connect('text-changed', () => {
             let searchText = searchEntry.get_text().toLowerCase();
             appList.remove_all_children();
@@ -324,7 +852,7 @@ class MyDock {
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
 
-        let bottomOffset = 25;
+        let bottomOffset = 10;
 
         // Calculer la position horizontale centrale
         let centerX = Math.floor((monitor.width / 2) - (this.container.width / 2));
@@ -340,51 +868,64 @@ class MyDock {
 }
 
 class NetworkSetting {
-    constructor() {
-        // Définir les chemins des icônes
-        let wifiButtonPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon/wifiwth.png`;
-        let soundButtonPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon/volumewth.png`;
-        let batteryButtonPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon/battery-fullwth.png`;
+        constructor() {
+        // Assurez-vous que ce chemin est EXACT (majuscules/minuscules comptent sur Linux)
+        this._iconsPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon`;
+
+        // --- 1. CRÉATION DES BOUTONS ---
+        this.container = new St.BoxLayout({
+            style_class: 'network-settings-container',
+            vertical: false
+        });
+
+        let wifiObj = this.createDynamicButton('wifiwth0barre.png');
+        this.wifiButton = wifiObj.button;
+        this._wifiIcon = wifiObj.icon;
+        this.container.add_child(this.wifiButton);
+
+        let soundObj = this.createDynamicButton('volumewth.png');
+        this.soundButton = soundObj.button;
+        this._soundIcon = soundObj.icon;
+        this.container.add_child(this.soundButton);
+
+        let batObj = this.createDynamicButton('battery-fullwth.png');
+        this.batteryButton = batObj.button;
+        this._batteryIcon = batObj.icon;
+        this.container.add_child(this.batteryButton);
+
+        Main.layoutManager._backgroundGroup.add_child(this.container);
+        Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
+        
+        this.container.connect('notify::allocation', () => { this._setPosition(); });
+        this._setPosition();
 
         global.barReseau = this;
-
         this.wifiMenu = null;
         this.bleMenu = null;
 
-        // Créer le conteneur principal
-        this.container = new St.BoxLayout({
-            style_class: 'network-settings-container',
-            vertical: false // Horizontal alignment
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+            this._initAudio();
+            this._initPower();
+            this._initNetwork();
+            return GLib.SOURCE_REMOVE;
         });
-
-        // Créer des boutons avec les icônes spécifiées
-        this.wifiButton = this.createButtons(wifiButtonPath);
-        this.soundButton = this.createButtons(soundButtonPath);
-        this.batteryButton = this.createButtons(batteryButtonPath);
-        this.keybtn = this.createButtonsKey()
-
-        // Ajouter les boutons au conteneur principal
-        this.container.add_child(this.keybtn);
-        this.container.add_child(this.wifiButton);
-        this.container.add_child(this.soundButton);
-        this.container.add_child(this.batteryButton);
-
-        // Ajouter le conteneur au groupe backgroundGroup
-        Main.layoutManager._backgroundGroup.add_child(this.container);
-
-        // Réordonner les enfants pour placer le conteneur en arrière-plan
-        Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
-
-        // Se connecter au signal "notify::width" pour ajuster la position après que la taille soit définie
-        this.container.connect('notify::allocation', () => {
-            this._setPosition();
-        });
-
-        // Initialement positionner le conteneur
-        this._setPosition();
     }
 
-    createButtons(iconPath) {
+    _updateIcon(iconActor, iconName) {
+        if (iconActor && iconName) {
+            let path = `${this._iconsPath}/${iconName}`;
+            let file = Gio.File.new_for_path(path);
+            
+            if (file.query_exists(null)) {
+                let gicon = new Gio.FileIcon({ file: file });
+                iconActor.gicon = gicon;
+            } else {
+                log(`[PrismUI Erreur] Fichier icône introuvable : ${path}`);
+            }
+        }
+    }
+
+    createDynamicButton(defaultIconName) {
         let button = new St.Button({
             style_class: 'feature-button-net',
             reactive: true,
@@ -392,108 +933,195 @@ class NetworkSetting {
             can_focus: true
         });
 
+        let path = `${this._iconsPath}/${defaultIconName}`;
+        let file = Gio.File.new_for_path(path);
+        let gicon;
+
+        if (file.query_exists(null)) {
+            gicon = new Gio.FileIcon({ file: file });
+        } else {
+            log(`[PrismUI Erreur] Icône par défaut introuvable : ${path}`);
+            gicon = Gio.icon_new_for_string('image-missing-symbolic');
+        }
+
         let icon = new St.Icon({
-            gicon: Gio.icon_new_for_string(iconPath),
+            gicon: gicon,
             style_class: 'feature-icon-net',
-            icon_size: 20
+            icon_size: 26
         });
 
         button.set_child(icon);
         
-        // Connecter l'événement de clic sur le bouton
         button.connect('clicked', () => {
             if (menunet) {
-                // Le menu est déjà ouvert, donc on le ferme
-                menunet.destroy();
-                menunet = null; // Réinitialiser la référence du menu
-                if (wifiMenu) {
-                    // Le menu Wi-Fi est déjà ouvert, donc on le ferme
-                    wifiMenu.destroy();
-                    wifiMenu = null; // Réinitialiser la référence du menu Wi-Fi
-                }
-                if (Volmenu) {
-                    log('Destroying existing sound menu');
-                    Volmenu.destroy();
-                    Volmenu = null;
-                }
-                if (bleMenu) {
-                    log('Destroying existing Bluetooth menu');
-                    bleMenu.destroy();
-                    bleMenu = null;
-                }
+                this._closeAllMenus();
             } else {
-                menunet = this._handleBarClick(); // Stocker la référence du menu ouvert
-                log('open');
+                menunet = this._handleBarClick();
             }
         });
 
-        return button;
+        return { button, icon };
+    }
+    
+    _closeAllMenus() {
+        if (menunet) { menunet.destroy(); menunet = null; }
+        if (wifiMenu) { wifiMenu.destroy(); wifiMenu = null; }
+        if (bleMenu) { bleMenu.destroy(); bleMenu = null; }
+        if (Volmenu) { Volmenu.destroy(); Volmenu = null; }
+        if (Accesmenu) { Accesmenu.destroy(); Accesmenu = null; }
     }
 
-    createButtonsKey() {
-        let button = new St.Button({
-            style_class: 'feature-button-net',
-            reactive: true,
-            track_hover: true,
-            can_focus: true
-        });
-    
-        let icon = new St.Icon({
-            gicon: Gio.icon_new_for_string(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/key/keyboardw.png`),
-            style_class: 'feature-icon-net',
-            icon_size: 20
-        });
-    
-        button.set_child(icon);
-        
-        // Connecter l'événement de clic sur le bouton
-        button.connect('clicked', () => {
+    _initAudio() {
+        try {
+            this._mixerControl = new Gvc.MixerControl({ name: 'PrismUI Volume Control' });
+            this._mixerControl.open();
+            this._mixerControl.connect('state-changed', () => this._updateVolumeIcon());
+            this._updateVolumeIcon();
+        } catch (e) { log(`[PrismUI] Erreur Audio: ${e.message}`); }
+    }
+
+    _updateVolumeIcon() {
+        if (!this._mixerControl) return;
+        let stream = this._mixerControl.get_default_sink();
+        let iconName = 'volumewth.png';
+
+        if (stream) {
+            if (!stream._prismConnected) {
+                stream.connect('notify::volume', () => this._updateVolumeIcon());
+                stream.connect('notify::is-muted', () => this._updateVolumeIcon());
+                stream._prismConnected = true;
+            }
+            if (stream.is_muted) iconName = 'volume-slashwth.png';
+            else {
+                let vol = stream.volume / this._mixerControl.get_vol_max_norm();
+                if (vol <= 0) iconName = 'volume-slashwth.png';
+                else if (vol < 0.5) iconName = 'volumewth-50prc.png';
+                else iconName = 'volumewth.png';
+            }
+        }
+        this._updateIcon(this._soundIcon, iconName);
+    }
+
+    _getMixer() { return this._mixerControl; }
+
+    _initPower() {
+        this._batteryProxy = null;
+        try {
+            this._upClient = UPowerGlib.Client.new_full(null);
             
-        });
-    
-        return button;
+            this._upClient.connect('notify::display-device', () => {
+                this._syncBattery();
+            });
+            
+            this._syncBattery();
+
+            this._powerTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+                this._updateBatteryIcon(this._batteryProxy);
+                return GLib.SOURCE_CONTINUE;
+            });
+
+        } catch (e) { log(`[PrismUI] Erreur Power: ${e.message}`); }
+    }
+
+    _syncBattery() {
+        let device = this._upClient.get_display_device();
+        
+        if (device !== this._batteryProxy) {
+            this._batteryProxy = device;
+            if (this._batteryProxy && !this._batteryProxy._prismConnected) {
+                this._batteryProxy.connect('notify::percentage', () => this._updateBatteryIcon(this._batteryProxy));
+                this._batteryProxy.connect('notify::state', () => this._updateBatteryIcon(this._batteryProxy));
+                this._batteryProxy.connect('notify::is-present', () => this._updateBatteryIcon(this._batteryProxy));
+                this._batteryProxy._prismConnected = true;
+            }
+        }
+        
+        this._updateBatteryIcon(this._batteryProxy);
+    }
+
+    _updateBatteryIcon(device) {
+        let percentage = device ? device.percentage : 100;
+        let state = device ? device.state : UPowerGlib.DeviceState.UNKNOWN; // 1=Charging
+
+        let baseName = 'battery-fullwth';
+        if (percentage < 10) baseName = 'battery-emptywth';
+        else if (percentage < 35) baseName = 'battery-quarterwth';
+        else if (percentage < 60) baseName = 'battery-halfwth';
+        else if (percentage < 85) baseName = 'battery3s4wth';
+        else baseName = 'battery-fullwth';
+
+        let suffix = '';
+        if (state === UPowerGlib.DeviceState.CHARGING) {
+            suffix = '-ch';
+        }
+
+        let iconName = `${baseName}${suffix}.png`;
+        
+        this._updateIcon(this._batteryIcon, iconName);
+    }
+
+    _initNetwork() {
+        try {
+            this._nmClient = NM.Client.new(null);
+            this._nmClient.connect('notify::primary-connection', () => this._updateNetworkIcon());
+            this._nmClient.connect('notify::connectivity', () => this._updateNetworkIcon());
+            this._updateNetworkIcon();
+        } catch (e) { log(`[PrismUI] Erreur Network: ${e.message}`); }
+    }
+
+    _updateNetworkIcon() {
+        if (!this._nmClient) return;
+        let primary = this._nmClient.get_primary_connection();
+        let iconName = 'pas-de-signal.png'; 
+        if (primary) {
+            let type = primary.get_connection_type();
+            if (type.includes('ethernet')) iconName = 'ethernet.png';
+            else if (type.includes('wireless')) {
+                let devices = this._nmClient.get_devices();
+                for (let device of devices) {
+                    if (device.device_type === NM.DeviceType.WIFI && device.active_connection === primary) {
+                        let ap = device.active_access_point;
+                        if (ap) {
+                            let strength = ap.strength;
+                            if (strength < 25) iconName = 'wifiwth0barre.png';
+                            else if (strength < 50) iconName = 'wifiwth1barre.png';
+                            else if (strength < 75) iconName = 'wifiwth2barre.png';
+                            else iconName = 'wifiwth.png';
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        this._updateIcon(this._wifiIcon, iconName);
+    }
+
+    _fitWindowToDock() {
+        let window = global.display.focus_window;
+        if (!window) return;
+        let monitorIndex = window.get_monitor();
+        let monitor = Main.layoutManager.monitors[monitorIndex];
+        let dockHeight = (global.myDock && global.myDock.container) ? global.myDock.container.height + 25 : 100;
+        let topBarHeight = Main.panel.actor.visible ? Main.panel.actor.height : 0;
+        let newX = monitor.x;
+        let newY = monitor.y + topBarHeight;
+        let newWidth = monitor.width;
+        let newHeight = monitor.height - topBarHeight - dockHeight;
+        if (window.maximized_vertically || window.maximized_horizontally) { window.unmaximize(Meta.MaximizeFlags.BOTH); }
+        window.move_resize_frame(true, newX, newY, newWidth, newHeight);
+        if (global.windowEffectManager) {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                global.windowEffectManager.applyClip(window);
+                return GLib.SOURCE_REMOVE;
+            });
+        }
     }
 
     _setPosition() {
         let primaryMonitor = Main.layoutManager.primaryMonitor;
-        let containerWidth = this.container.width;
-        let containerHeight = this.container.height;
-    
-        let topOffset = 23;
-    
-        let posX = primaryMonitor.x + primaryMonitor.width - containerWidth - 20;
-        let posY = primaryMonitor.y + topOffset;
-    
+        let posX = primaryMonitor.x + primaryMonitor.width - this.container.width - 20;
+        let posY = primaryMonitor.y + 23;
         this.container.set_position(posX, posY);
-    }
-
-    createFeatureButton(iconPath, labelText) {
-        let button = new St.Button({
-            style_class: 'feature-button',
-            reactive: true
-        });
-
-        let icon = new St.Icon({
-            gicon: Gio.icon_new_for_string(iconPath),
-            style_class: 'feature-icon',
-            icon_size: 32
-        });
-
-        let label = new St.Label({
-            text: labelText,
-            style_class: 'feature-label'
-        });
-
-        let box = new St.BoxLayout({
-            vertical: true,
-            style_class: 'feature-box'
-        });
-
-        box.add_child(icon);
-        box.add_child(label);
-        button.set_child(box);
-
-        return button;
     }
 
     async _wifimenu() {
@@ -519,10 +1147,8 @@ class NetworkSetting {
             style_class: 'label-title'
         });
     
-        // Créer un bouton bascule pour le Wi-Fi
         let wifiSwitch = new PopupMenu.PopupSwitchMenuItem('', await this.getWifiState(), { reactive: true });
     
-        // Gérez l'événement de changement d'état de l'interrupteur
         wifiSwitch.connect('toggled', async (item, state) => {
             await this.setWifiState(state);
         });
@@ -593,7 +1219,8 @@ class NetworkSetting {
         let serviceActive = await this.isBluetoothServiceActive();
         
         if (!serviceActive) {
-            notificationManager.showNotification("Le service Bluetooth est inactif", "Veuillez activer le service Bluetooth pour continuer.");
+            const syslogo = "preferences-system"
+            notificationManager.showNotification("Le service Bluetooth est inactif", "Veuillez activer le service Bluetooth pour continuer.", "Système", syslogo);
             return null;
         }
     
@@ -753,37 +1380,6 @@ class NetworkSetting {
     
         return networks;
     }
-
-    async getBluetoothState() {
-        try {
-            let subprocess = new Gio.Subprocess({
-                argv: ['bluetoothctl', 'show'],
-                flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-            });
-    
-            subprocess.init(null);
-    
-            let result = await new Promise((resolve, reject) => {
-                subprocess.communicate_utf8_async(null, null, (proc, res) => {
-                    try {
-                        let [ok, stdout, stderr] = proc.communicate_utf8_finish(res);
-                        if (!ok) {
-                            reject(new Error('Failed to execute bluetoothctl'));
-                            return;
-                        }
-                        resolve(stdout.toString());
-                    } catch (error) {
-                        reject(error);
-                    }
-                });
-            });
-    
-            return result.includes('Powered: yes');
-        } catch (error) {
-            logError(error, 'Failed to retrieve Bluetooth state');
-            return false;
-        }
-    }
     
     async getBluetoothState() {
         log('Attempting to get Bluetooth state');
@@ -827,164 +1423,29 @@ class NetworkSetting {
         }
     }
 
-    async _volumeMenu() {
-        // Dimensions et positions
-        let menuWidth = 280;
-        let menuHeight = 310;
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
-
-        let topOffset = 110;
-        let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
     
-        // Création du menu Volume
-        let volumeMenu = new St.BoxLayout({
-            vertical: true,
-            style_class: 'net-box'
-        });
-    
-        let header = new St.BoxLayout({
-            vertical: false,
-            style_class: 'header-volume'
-        });
-    
-        let title = new St.Label({
-            text: 'Contrôle du Volume',
-            style_class: 'label-title-2'
-        });
-    
-        header.add_child(title);
-        volumeMenu.add_child(header);
-
-        let title2b = new St.Label({
-            text: 'Volume principale :',
-            style_class: 'vol-text'
-        });
-
-        volumeMenu.add_child(title2b);
-    
-        // Création de la barre de volume
-        let volumeSliderContainer = new St.BoxLayout({
-            style_class: 'volume-slider-container',
-            reactive: true,
-            track_hover: true,
-            width: menuWidth,
-            height: 30 // Ajuster la hauteur si nécessaire
-        });
-    
-        let volumeIndicator = new St.Widget({
-            style_class: 'volume-indicator',
-            reactive: true,
-            width: 0 // Initialement 0, mis à jour dynamiquement
-        });
-    
-        volumeSliderContainer.add_child(volumeIndicator);
-        volumeMenu.add_child(volumeSliderContainer);
-    
-        // Initialiser la barre de volume
+    _getSetting(schema, settingKey) {
         try {
-            let volume = await this._getCurrentVolume();
-            if (volume !== null) {
-                volumeIndicator.set_width((volume / 100) * menuWidth);
-            }
-        } catch (error) {
-            log("Erreur lors de l'initialisation du contrôle du volume : " + error.message);
-        }
-    
-        volumeSliderContainer.connect('button-press-event', (actor, event) => {
-            this._handleVolumeChange(event, volumeSliderContainer);
-        });
-    
-        volumeSliderContainer.connect('motion-event', (actor, event) => {
-            this._handleVolumeChange(event, volumeSliderContainer);
-        });
-    
-        volumeMenu.set_position(menuX, menuY);
-        volumeMenu.set_size(menuWidth, menuHeight);
-    
-        Main.layoutManager.addChrome(volumeMenu);
-    
-        volumeMenu.connect('destroy', () => {
-            Main.layoutManager.removeChrome(volumeMenu);
-        });
-    
-        return volumeMenu;
-    }
-    
-    _handleVolumeChange(event, volumeSliderContainer) {
-        let [x, y] = event.get_coords();
-    
-        // Obtenir la position et les dimensions du conteneur
-        let [containerX, containerY] = volumeSliderContainer.get_transformed_position();
-        let containerWidth = volumeSliderContainer.width;
-        
-        if (containerWidth > 0) {
-            let relativeX = x - containerX;
-    
-            // Calculer le volume en pourcentage
-            let newVolume = Math.round((relativeX / containerWidth) * 100);
-            newVolume = Math.min(Math.max(newVolume, 0), 100);
-    
-            this._setVolume(newVolume);
-            this._updateVolumeIndicator(newVolume, volumeSliderContainer);
-        } else {
-            log("Erreur : La largeur du conteneur est nulle ou invalide.");
-        }
-    }
-    
-    _updateVolumeIndicator(volume, volumeSliderContainer) {
-        let containerWidth = volumeSliderContainer.width;
-        let volumeWidth = (volume / 100) * containerWidth;
-    
-        let volumeIndicator = volumeSliderContainer.get_children()[0];
-        if (volumeIndicator) {
-            volumeIndicator.set_width(volumeWidth);
-        }
-    }
-        
-    
-    async _getCurrentVolume() {
-        try {
-            // Exécute une commande système pour obtenir le volume actuel via `pactl`
-            let [success, output] = GLib.spawn_command_line_sync('pactl get-sink-volume @DEFAULT_SINK@');
-    
-            if (!success) {
-                throw new Error('Erreur lors de l\'exécution de pactl.');
-            }
-    
-            // Convertir la sortie en chaîne de caractères
-            let outputStr = new TextDecoder().decode(output);
-    
-            log('Sortie brute de pactl : ' + outputStr); // Ajout du log pour le débogage
-    
-            // Cherche le volume en pourcentage après '100%' dans la sortie
-            let match = outputStr.match(/(\d+)% /); // Il y a un espace après le pourcentage
-    
-            if (!match) {
-                throw new Error('Impossible de trouver le volume dans la sortie de pactl.');
-            }
-    
-            // Convertir le pourcentage en nombre
-            let volume = parseInt(match[1], 10);
-    
-            if (isNaN(volume)) {
-                throw new Error('Le volume récupéré n\'est pas un nombre.');
-            }
-            log('sortie est de ' + volume);
-            // Retourner le volume comme un nombre entre 0 et 100
-            return volume;
-    
+            let settings = Gio.Settings.new(schema);
+            // Retourne la valeur de la clé demandée
+            return settings.get_value(settingKey).deep_unpack();
         } catch (e) {
-            log("Erreur lors de la récupération du volume : " + e.message);
-            return null; // Retourne null ou une valeur par défaut en cas d'erreur
+            log(`Erreur lors de la récupération du paramètre ${settingKey}: ${e.message}`);
+            return null; // Retourne null en cas d'erreur
         }
     }
     
-    _setVolume(volume) {
-        // Utiliser `pactl` pour définir le volume
-        GLib.spawn_command_line_async(`pactl set-sink-volume @DEFAULT_SINK@ ${volume}%`);
+    _setSetting(schema, settingKey, value) {
+        try {
+            let settings = Gio.Settings.new(schema);
+            // Définit la valeur de la clé demandée
+            settings.set_value(settingKey, GLib.Variant.new_boolean(value));
+        } catch (e) {
+            log(`Erreur lors de la définition du paramètre ${settingKey}: ${e.message}`);
+        }
     }
 
-    async _accessibilityMenu() {
+async _accessibilityMenu() {
         // Dimensions et positions
         let menuWidth = 280;
         let menuHeight = 310;
@@ -1083,107 +1544,54 @@ class NetworkSetting {
     
         return menu;
     }
-    
-    _getSetting(schema, settingKey) {
-        try {
-            // Crée un objet Gio.Settings pour le schéma donné
-            let settings = Gio.Settings.new(schema);
-            // Retourne la valeur de la clé demandée
-            return settings.get_value(settingKey).deep_unpack();
-        } catch (e) {
-            log(`Erreur lors de la récupération du paramètre ${settingKey}: ${e.message}`);
-            return null; // Retourne null en cas d'erreur
-        }
-    }
-    
-    _setSetting(schema, settingKey, value) {
-        try {
-            // Crée un objet Gio.Settings pour le schéma donné
-            let settings = Gio.Settings.new(schema);
-            // Définit la valeur de la clé demandée
-            settings.set_value(settingKey, GLib.Variant.new_boolean(value));
-        } catch (e) {
-            log(`Erreur lors de la définition du paramètre ${settingKey}: ${e.message}`);
-        }
+
+_handleBarClick() {
+    let menunetWidth = 267;
+    let menunetHeight = 375;
+    let menunetX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menunetWidth) - 20);
+    let topOffset = 110;
+    let menunetY = Main.layoutManager.primaryMonitor.y + topOffset;
+
+    let menunet = new St.BoxLayout({
+        vertical: true,
+        style_class: 'net-boxmn'
+    });
+
+    menunet.set_position(menunetX, menunetY);
+    menunet.set_size(menunetWidth, menunetHeight);
+
+    // === HEURE + DATE ===
+    let now = new Date();
+    let dateLabel = new St.Label({ text: now.toLocaleDateString(), style_class: 'date-labelmn' });
+    let timeLabel = new St.Label({ text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), style_class: 'time-labelmn' });
+    let dateBox = new St.BoxLayout({ vertical: true, style_class: 'datetime-box' });
+    dateBox.add_child(timeLabel);
+    dateBox.add_child(dateLabel);
+
+    // === LIGNES WIFI / BLE / ACCESSIBILITÉ ===
+    function createToggleRow(iconName, title) {
+        let row = new St.BoxLayout({ vertical: false, style_class: 'toggle-row' });
+        let icon = new St.Icon({ icon_name: iconName, icon_size: 18, style_class: 'toggle-icon' });
+        let label = new St.Label({ text: title, style_class: 'toggle-label' });
+
+        row.add_child(icon);
+        row.add_child(label);
+
+        let btn = new St.Button({ style_class: 'toggle-btn' });
+        btn.set_child(row);
+        return btn;
     }
 
-    _handleBarClick() {
-        let menunetWidth = 267;
-        let menunetHeight = 420;
-        let menunetX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menunetWidth) - 20);
-    
-        let topOffset = 110;
-        let menunetY = Main.layoutManager.primaryMonitor.y + topOffset;
-    
-        let menunet = new St.BoxLayout({
-            vertical: true,
-            style_class: 'net-box'
-        });
-    
-        menunet.set_position(menunetX, menunetY);
-        menunet.set_size(menunetWidth, menunetHeight);
-    
-        // Create labels for time and date
-        let timeLabel = new St.Label({
-            style_class: 'time-label'
-        });
-    
-        let dateLabel = new St.Label({
-            style_class: 'date-label'
-        });
-    
-        // Update time and date every second
-        let updateTimeDate = () => {
-            let now = new Date();
-            let timeString = now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            let dateString = now.toLocaleDateString('fr-FR', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
-    
-            timeLabel.set_text(timeString);
-            dateLabel.set_text(dateString);
-        };
-    
-        updateTimeDate();
-        let timeUpdateInterval = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-            updateTimeDate();
-            return GLib.SOURCE_CONTINUE;
-        });
-    
-        // Create a "Connexion" button
-        let connexionButton = new St.Button({
-            label: 'Connexion à PrismID',
-            style_class: 'connexion-button'
-        });
-    
-        connexionButton.connect('clicked', () => {
-            openConnectionPopup();
-        });
-    
-        // Add timeLabel, dateLabel, and connexionButton to menunet
-        menunet.add_child(timeLabel);
-        menunet.add_child(dateLabel);
-        menunet.add_child(connexionButton);
-    
-        // Create two columns for the feature buttons
-        let column1 = new St.BoxLayout({
-            vertical: true,
-            style_class: 'feature-column'
-        });
-    
-        let column2 = new St.BoxLayout({
-            vertical: true,
-            style_class: 'feature-column'
-        });
-    
-        // Add feature buttons to the columns
-        let wifiButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/wifiblc.png`, 'Wi-Fi');
-        let bluetoothButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/bluetoothblc.png`, 'Bluetooth');
-        let soundButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/volumeblc.png`, 'Son');
-        let batteryButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/battery-fullblc.png`, 'Batterie');
-        let airplaneButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/plane-altblc.png`, 'Mode Avion');
-        let accessibilityButton = this.createFeatureButton(`${ExtensionUtils.getCurrentExtension().path}/icons/interface/blcicon/universal-accessblc.png`, 'Accessibilité');
-    
-        // Connect click events for the buttons
-        wifiButton.connect('clicked', async () => {
+    let wifiBtn = createToggleRow('network-wireless-symbolic', 'Wi-Fi');
+    let bleBtn = createToggleRow('bluetooth-symbolic', 'Bluetooth');
+    let accBtn = createToggleRow('preferences-desktop-accessibility-symbolic', 'Accessibilité');
+
+    let controlBox = new St.BoxLayout({
+        vertical: true,
+        style_class: 'control-box'
+    });
+
+    wifiBtn.connect('clicked', async () => {
             try {
                 log('Wi-Fi button clicked');
                 if (wifiMenu) {
@@ -1194,22 +1602,14 @@ class NetworkSetting {
                     log('Creating new Wi-Fi menu');
                     wifiMenu = await this._wifimenu();
                     menunet.destroy();
-                    menunet = null; // Réinitialiser la référence du menu
+                    menunet = null;
                 }
             } catch (error) {
                 log(`Error handling Wi-Fi button click: ${error}`);
             }
-        });
+    });
 
-        airplaneButton.connect('clicked', async () => {
-            GLib.spawn_command_line_async('gnome-control-center network');
-        });
-
-        batteryButton.connect('clicked', async () => {
-            GLib.spawn_command_line_async('gnome-control-center power');
-        });
-    
-        bluetoothButton.connect('clicked', async () => {
+    bleBtn.connect('clicked', async () => {
             try {
                 log('Bluetooth button clicked');
                 if (bleMenu) {
@@ -1220,32 +1620,14 @@ class NetworkSetting {
                     log('Creating new Bluetooth menu');
                     bleMenu = await this._blemenu();
                     menunet.destroy();
-                    menunet = null; // Réinitialiser la référence du menu
+                    menunet = null;
                 }
             } catch (error) {
                 log(`Error handling Bluetooth button click: ${error}`);
             }
-        });
+    });
 
-        soundButton.connect('clicked', async () => {
-            try {
-                log('sound button clicked');
-                if (Volmenu) {
-                    log('Destroying existing sound menu');
-                    Volmenu.destroy();
-                    Volmenu = null;
-                } else {
-                    log('Creating new sound menu');
-                    Volmenu = await this._volumeMenu();
-                    menunet.destroy();
-                    menunet = null; // Réinitialiser la référence du menu
-                }
-            } catch (error) {
-                log(`Error handling sound button click: ${error}`);
-            }
-        });
-        
-        accessibilityButton.connect('clicked', async () => {
+    accBtn.connect('clicked', async () => {
             try {
                 log('acces button clicked');
                 if (Accesmenu) {
@@ -1256,51 +1638,327 @@ class NetworkSetting {
                     log('Creating new acces menu');
                     Accesmenu = await this._accessibilityMenu();
                     menunet.destroy();
-                    menunet = null; // Réinitialiser la référence du menu
+                    menunet = null;
                 }
             } catch (error) {
                 log(`Error handling acces button click: ${error}`);
             }
-        });
-    
-        column1.add_child(wifiButton);
-        column1.add_child(soundButton);
-        column1.add_child(airplaneButton);
-    
-        column2.add_child(bluetoothButton);
-        column2.add_child(batteryButton);
-        column2.add_child(accessibilityButton);
-    
-        // Add columns to the menunet
-        let columnsContainer = new St.BoxLayout({
-            vertical: false,
-            style_class: 'columns-container'
-        });
-    
-        columnsContainer.add_child(column1);
-        columnsContainer.add_child(column2);
-    
-        menunet.add_child(columnsContainer);
-    
-        Main.layoutManager.addChrome(menunet);
-    
-        menunet.connect('destroy', () => {
-            GLib.source_remove(timeUpdateInterval); // Remove the time update interval
-            menunet = null; // Reset the menu reference
-            Main.layoutManager.removeChrome(menunet);
-        });
-    
-        return menunet;
-    }
-}    
+    });
 
-function openConnectionPopup() {
-    let url = 'https://live-prism.web.app/auth/1/Connection.html';
-    Util.spawn(['xdg-open', url]);
+    controlBox.add_child(wifiBtn);
+    controlBox.add_child(bleBtn);
+    controlBox.add_child(accBtn);
 
+    // === SLIDERS ===
+    let volumeLabel = new St.Label({ text: "Volume", style_class: 'label' });
+    let volumeSlider = new Slider.Slider(0.5);
+    let volumeBox = new St.BoxLayout({ vertical: false, style_class: 'slider-box-vol' });
+    volumeBox.add_child(volumeLabel);
+    volumeBox.add_child(volumeSlider);
 
-    // methode a définir pour la récupération de l'UUID et de l'email.
+    let stream = this._mixerControl.get_default_sink();
+        if (stream) {
+            let currentVol = stream.volume / this._mixerControl.get_vol_max_norm();
+            volumeSlider.value = Math.min(currentVol, 1);
+        }
+
+        volumeSlider.connect('notify::value', () => {
+            if (stream) {
+                let vol = volumeSlider.value * this._mixerControl.get_vol_max_norm();
+                stream.volume = vol;
+                stream.push_volume();
+            }
+        });
+
+        let brightLabel = new St.Label({ text: "Luminosité", style_class: 'label' });
+        let brightSlider = new Slider.Slider(0);
+        let brightBox = new St.BoxLayout({ vertical: false, style_class: 'slider-box-brig' });
+        brightBox.add_child(brightLabel);
+        brightBox.add_child(brightSlider);
+
+        try {
+            let brightnessProxy = Gio.DBusProxy.new_for_bus_sync(
+                Gio.BusType.SESSION,
+                Gio.DBusProxyFlags.NONE,
+                null,
+                "org.gnome.SettingsDaemon.Power",
+                "/org/gnome/SettingsDaemon/Power",
+                "org.gnome.SettingsDaemon.Power.Screen",
+                null
+            );
+            
+            let currentBrightness = brightnessProxy.get_cached_property("Brightness");
+            if (currentBrightness) {
+                brightSlider.value = currentBrightness.unpack() / 100;
+            }
+            
+            brightSlider.connect('notify::value', () => {
+                let newPercent = Math.floor(brightSlider.value * 100);
+                
+                brightnessProxy.call_sync(
+                    "org.freedesktop.DBus.Properties.Set",
+                    new GLib.Variant("(ssv)", [
+                        "org.gnome.SettingsDaemon.Power.Screen",
+                        "Brightness",
+                        new GLib.Variant("i", newPercent)
+                    ]),
+                    Gio.DBusCallFlags.NONE,
+                    -1,
+                    null
+                );
+            });
+
+        } catch (e) {
+            log("Erreur Luminosité DBus: " + e.message);
+        }
+
+    let bottomBox = new St.BoxLayout({ style_class: 'bottom-box', vertical: false }); // Assurez-vous que c'est horizontal
+
+        // Conteneur pour les boutons d'alim (à gauche)
+        let powerButtonsBox = new St.BoxLayout({ style_class: 'power-buttons-box' });
+        
+        let logoutBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-log-out-symbolic' }) });
+        let rebootBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-reboot-symbolic' }) });
+        let shutdownBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-shutdown-symbolic' }) });
+
+        logoutBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl restart gdm'); });
+        rebootBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl reboot'); });
+        shutdownBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl poweroff'); });
+
+        powerButtonsBox.add_child(logoutBtn);
+        powerButtonsBox.add_child(rebootBtn);
+        powerButtonsBox.add_child(shutdownBtn);
+
+        bottomBox.add_child(powerButtonsBox);
+        
+        let spacer = new St.Widget({ x_expand: true });
+        bottomBox.add_child(spacer);
+
+        let batteryBox = new St.BoxLayout({ style_class: 'menu-battery-box', vertical: false });
+        let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
+        let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
+
+        const updateMenuBattery = () => {
+            if (!this._upClient) return;
+            let device = this._upClient.get_display_device();
+            if (!device) return;
+
+            let percentage = Math.round(device.percentage);
+            let state = device.state;
+            
+            batteryLabel.text = `${percentage}%`;
+
+            let baseName = 'battery-fullwth';
+            if (percentage < 10) baseName = 'battery-emptywth';
+            else if (percentage < 35) baseName = 'battery-quarterwth';
+            else if (percentage < 60) baseName = 'battery-halfwth';
+            else if (percentage < 85) baseName = 'battery3s4wth';
+            else baseName = 'battery-fullwth';
+
+            let suffix = '';
+            if (state === UPowerGlib.DeviceState.CHARGING) suffix = '-ch';
+            else if (state === UPowerGlib.DeviceState.FULLY_CHARGED) { baseName = 'battery-fullwth'; suffix = ''; }
+
+            let iconName = `${baseName}${suffix}.png`;
+            
+            // Charger l'icône
+            let path = `${this._iconsPath}/${iconName}`;
+            let file = Gio.File.new_for_path(path);
+            if (file.query_exists(null)) {
+                batteryIcon.gicon = new Gio.FileIcon({ file: file });
+            } else {
+                batteryIcon.gicon = Gio.icon_new_for_string('battery-missing-symbolic');
+            }
+        };
+
+    updateMenuBattery();
+
+    batteryBox.add_child(batteryLabel);
+    batteryBox.add_child(batteryIcon);
+
+    bottomBox.add_child(batteryBox);
+
+    menunet.add_child(dateBox);
+    menunet.add_child(controlBox);
+    menunet.add_child(volumeBox);
+    menunet.add_child(brightBox);
+    menunet.add_child(bottomBox);
+
+    Mainloop.idle_add(() => {
+        Main.uiGroup.add_child(menunet);
+        return false;
+    });
+
+    global.stage.connect('button-press-event', () => menunet.destroy());
+    return menunet;
 }
+}
+
+var AboutDialog = GObject.registerClass(
+    class AboutDialog extends ModalDialog.ModalDialog {
+        _init() {
+            super._init({ styleClass: 'prism-about-dialog', destroyOnClose: true });
+            let contentBox = this.contentLayout;
+            contentBox.style_class = 'prism-about-content';
+            contentBox.vertical = true;
+            let icon = new St.Icon({ gicon: Gio.icon_new_for_string(`${Me.path}/icons/logo.png`), icon_size: 96, style_class: 'prism-about-logo', x_align: Clutter.ActorAlign.CENTER });
+            contentBox.add_child(icon);
+            let title = new St.Label({ text: "IUI", style_class: 'prism-about-title', x_align: Clutter.ActorAlign.CENTER });
+            contentBox.add_child(title);
+            let version = new St.Label({ text: `Version ${Me.metadata.version || 'Bêta'}`, style_class: 'prism-about-version', x_align: Clutter.ActorAlign.CENTER });
+            contentBox.add_child(version);
+            this.statusLabel = new St.Label({ text: "", style: "color: #aaa; font-size: 12px; padding-top: 10px; text-align: center;", x_align: Clutter.ActorAlign.CENTER, visible: false });
+            contentBox.add_child(this.statusLabel);
+            this._updateBtn = this.addButton({ label: 'Rechercher une mise à jour', action: () => this._onUpdateClicked() });
+            this.addButton({ label: 'Fermer', action: () => this.close(), key: Clutter.KEY_Escape });
+        }
+
+        _onUpdateClicked() {
+            let button = this._updateBtn;
+            if (button) { button.reactive = false; button.set_label("Vérification..."); }
+            this.statusLabel.text = "Connexion au serveur...";
+            this.statusLabel.show();
+            this.statusLabel.style = "color: #aaa;";
+            
+            let updater = new UpdateManager();
+
+            updater.checkUpdates().then((isUpdateAvailable) => {
+                if (isUpdateAvailable) {
+                    if (button) button.set_label("Téléchargement...");
+                    this.statusLabel.text = "Mise à jour trouvée ! Téléchargement...";
+                    
+                    updater.updateAll().then(() => {
+                        if (button) button.set_label("Redémarrage requis");
+                        this.statusLabel.style = "color: #4CAF50; font-weight: bold;";
+                        this.statusLabel.text = "Mise à jour installée ! Déconnexion dans 5 sec...";
+                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+                            GLib.spawn_command_line_async('gnome-session-quit --logout --no-prompt');
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    });
+                } else {
+                    if (button) {
+                        button.reactive = true;
+                        button.set_label("Rechercher une mise à jour");
+                    }
+                    this.statusLabel.style = "color: #4CAF50; font-weight: bold;";
+                    this.statusLabel.text = "IUI est déjà à jour.";
+                }
+            }).catch((e) => {
+                if (button) { button.reactive = true; button.set_label("Réessayer"); }
+                this.statusLabel.style = "color: #FF5252; font-weight: bold;";
+                this.statusLabel.text = "Erreur: " + e.message;
+                log("Erreur update: " + e);
+            });
+        }
+    }
+);
+
+const UpdateManager = class {
+    constructor() {
+        this.baseUrl = "https://projet-prism.fr/update/iui/last/";
+        this.filesToUpdate = [
+            "extension.js",
+            "intelligentsearchbar.js",
+            "notificationsys.js",
+            "time.js",
+            "stylesheet.css",
+            "schemas/gschemas.compiled",
+            "metadata.json"
+        ];
+        if (Soup.Session.new) {
+            this._session = new Soup.Session(); 
+        } else {
+            this._session = new Soup.SessionAsync(); 
+        }
+    }
+
+    checkUpdates() {
+        return new Promise((resolve, reject) => {
+            let remoteUrl = this.baseUrl + "metadata.json";
+            let message = Soup.Message.new('GET', remoteUrl);
+
+            // Fonction de traitement de la réponse
+            const onResponse = (bytes) => {
+                try {
+                    let jsonContent = new TextDecoder().decode(bytes);
+                    let remoteMetadata = JSON.parse(jsonContent);
+                    
+                    let currentVersion = parseFloat(Me.metadata.version);
+                    let remoteVersion = parseFloat(remoteMetadata.version);
+
+                    log(`[PrismUI Update] Version locale: ${currentVersion}, Version distante: ${remoteVersion}`);
+
+                    if (remoteVersion > currentVersion) {
+                        resolve(true); // Mise à jour disponible
+                    } else {
+                        resolve(false); // Déjà à jour
+                    }
+                } catch (e) {
+                    reject(new Error("Erreur lecture metadata distant: " + e.message));
+                }
+            };
+
+            if (this._session.send_and_read_async) {
+                this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+                    try {
+                        let bytes = session.send_and_read_finish(res);
+                        if (message.status_code !== 200) { reject(new Error(`HTTP ${message.status_code}`)); return; }
+                        onResponse(bytes.get_data()); // GBytes to Uint8Array
+                    } catch (e) { reject(e); }
+                });
+            } else {
+                this._session.queue_message(message, (session, msg) => {
+                    if (msg.status_code !== 200) { reject(new Error(`HTTP ${msg.status_code}`)); return; }
+                    let body = msg.response_body.data; 
+                    onResponse(body);
+                });
+            }
+        });
+    }
+
+    _downloadFile(filename) {
+        return new Promise((resolve, reject) => {
+            let remoteUrl = this.baseUrl + filename;
+            let localPath = GLib.build_filenamev([Me.dir.get_path(), filename]);
+            let file = Gio.File.new_for_path(localPath);
+            let message = Soup.Message.new('GET', remoteUrl);
+
+            const writeToFile = (bytes) => {
+                file.replace_contents_async(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (f, r) => {
+                    try {
+                        f.replace_contents_finish(r);
+                        log(`[PrismUI Update] Fichier mis à jour : ${file.get_basename()}`);
+                        resolve(file.get_basename());
+                    } catch (err) { reject(err); }
+                });
+            };
+
+            if (this._session.send_and_read_async) {
+                this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
+                    try {
+                        let bytes = session.send_and_read_finish(res);
+                        if (message.status_code !== 200) { reject(new Error(`HTTP ${message.status_code}`)); return; }
+                        writeToFile(bytes);
+                    } catch (e) { reject(e); }
+                });
+            } else {
+                this._session.queue_message(message, (session, msg) => {
+                    if (msg.status_code !== 200) { reject(new Error(`HTTP ${msg.status_code}`)); return; }
+                    writeToFile(msg.response_body.flatten());
+                });
+            }
+        });
+    }
+
+    async updateAll() {
+        log("[PrismUI Update] Démarrage du téléchargement...");
+        let promises = [];
+        for (let file of this.filesToUpdate) { promises.push(this._downloadFile(file)); }
+        await Promise.all(promises);
+        log("[PrismUI Update] Terminé.");
+    }
+};
 
 function init() {
     if (global.myDock) {
@@ -1322,7 +1980,8 @@ function init() {
 }
 
 function enable() {
-    notificationManager.showNotification("PrismUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.");
+    const syslogo = "preferences-system"
+    notificationManager.showNotification("IUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.", "Système", syslogo);
     // Créez une instance des paramètres de fond d'écran
     let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
     // Sauvegardez l'URI du fond d'écran actuel
@@ -1332,6 +1991,13 @@ function enable() {
     let wallpaperUri = GLib.filename_to_uri(wallpaperPath, null);
     backgroundSettings.set_string('picture-uri', wallpaperUri);
     Main.panel.actor.hide();
+
+    closeOverviewTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+        if (Main.overview.visible) {
+            Main.overview.hide();
+        }
+        return GLib.SOURCE_REMOVE;
+    });
 }
 
 function disable() {

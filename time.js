@@ -1,3 +1,10 @@
+/*                                                                */
+/*       Copyright (c) Project PRISM. All rights reserved.        */
+/*         This software is licensed under the CC BY-NC           */
+/*          Full text of the license can be found at              */
+/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                                                                */
+
 const { St, GObject, Gio, Clutter, GLib } = imports.gi;
 const Main = imports.ui.main;
 const ExtensionUtils = imports.misc.extensionUtils;
