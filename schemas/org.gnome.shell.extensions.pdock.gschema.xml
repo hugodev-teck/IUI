@@ -1,0 +1,9 @@
+<schemalist>
+  <schema id="org.gnome.shell.extensions.pdock" path="/org/gnome/shell/extensions/pdock/">
+    <key name="dock-apps" type="as">
+      <default>['firefox.desktop', 'org.gnome.Terminal.desktop', 'org.gnome.Nautilus.desktop']</default>
+      <summary>Liste des applications dans le dock</summary>
+      <description>Liste des fichiers .desktop à afficher sur le dock.</description>
+    </key>
+  </schema>
+</schemalist>

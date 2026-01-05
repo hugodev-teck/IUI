@@ -760,6 +760,117 @@
     border-color: #ffffff;
 }
 
+.clipboard-menu {
+    background-color: rgba(20, 20, 20, 0.95); /* Fond sombre type Prism */
+    border: 1px solid rgba(255, 255, 255, 0.1); /* Bordure fine */
+    border-radius: 16px; /* Coins arrondis */
+    padding: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); /* Ombre portée */
+    color: #ffffff;
+}
+
+/* L'en-tête (Titre + Bouton) */
+.clipboard-header {
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1); /* Ligne de séparation */
+    margin-bottom: 8px;
+}
+
+/* Le titre "Presse-papier" */
+.clipboard-title {
+    font-weight: 800;
+    font-size: 15px;
+    padding-top: 4px; /* Pour aligner verticalement avec le bouton */
+    color: #eeeeee;
+}
+
+/* Le bouton "Tout effacer" */
+.clipboard-clear-btn {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: bold;
+    color: #aaaaaa;
+    transition-duration: 200ms;
+}
+
+.clipboard-clear-btn:hover {
+    background-color: rgba(255, 59, 48, 0.2); /* Rouge au survol */
+    color: #ff3b30;
+    box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.5);
+}
+
+.clipboard-clear-btn:active {
+    background-color: rgba(255, 59, 48, 0.4);
+}
+
+/* Zone de scroll */
+.clipboard-scroll {
+    padding-right: 2px;
+}
+
+/* La liste des éléments */
+.clipboard-list {
+    spacing: 4px; /* Espace entre les boutons */
+}
+
+/* Chaque élément de l'historique (Bouton) */
+.clipboard-item {
+    padding: 8px 12px;
+    border-radius: 10px;
+    background-color: transparent;
+    border: 1px solid transparent; /* Pour éviter le saut au survol */
+    transition-duration: 150ms;
+    text-align: left; /* Texte aligné à gauche */
+}
+
+.clipboard-item:hover {
+    background-color: rgba(255, 255, 255, 0.1); /* Gris clair au survol */
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.clipboard-item:active {
+    background-color: rgba(255, 255, 255, 0.2); /* Plus clair au clic */
+}
+
+.clipboard-item StLabel {
+    font-size: 13px;
+    color: #cccccc;
+}
+
+.clipboard-item:hover StLabel {
+    color: #ffffff;
+}
+
+/* Message "Aucun élément copié" */
+.clipboard-empty {
+    font-size: 13px;
+    color: #666666;
+    text-align: center;
+    padding-top: 40px;
+    padding-bottom: 20px;
+}
+
+.dock-context-menu {
+    background-color: rgba(30, 30, 30, 0.95); /* Fond sombre */
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    padding: 6px;
+    min-width: 180px;
+    color: white;
+}
+
+.popup-menu-item {
+    border-radius: 8px;
+    padding: 4px;
+}
+
+.popup-menu-item:hover {
+    background-color: rgba(255, 255, 255, 0.15); /* Survol */
+}
+
 .prism-about-dialog {
     /* Fond de la modale */
     background-color: rgba(30, 30, 30, 0.95);
@@ -797,4 +908,3 @@
     color: #aaaaaa;
     margin-bottom: 20px;
 }
-.prism-light-mode .prism-about-version { color: #666; }

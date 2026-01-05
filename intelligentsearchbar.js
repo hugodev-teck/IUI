@@ -10,9 +10,8 @@ const Main = imports.ui.main;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
 const GLib = imports.gi.GLib;
-const Util = imports.misc.util; // Ajout de Util pour simplifier les appels async
+const Util = imports.misc.util;
 
-// Définition des constantes de filtre (inchangées)
 const SEARCH_TYPE = {
     ALL: 'all',
     APP: 'app',
@@ -175,10 +174,8 @@ var LocalSearchEngine = class {
     }
 };
 
-// ... (Début de SearchBar) ...
 var SearchBar = GObject.registerClass(
     class SearchBar extends GObject.Object {
-        // ... (Méthodes _init, _center, getWidget, show, hide, toggle - INCHANGÉES) ...
 
         _init() {
             super._init();
@@ -215,7 +212,6 @@ var SearchBar = GObject.registerClass(
             });
             contentContainer.add_child(searchIcon);
     
-            // Ajouter le texte au centre
             let searchText = new St.Label({
                 text: 'Cliquez pour rechercher',
                 style_class: 'searchbar-text',
@@ -223,7 +219,6 @@ var SearchBar = GObject.registerClass(
             });
             contentContainer.add_child(searchText);
     
-            // Ajouter le logo de génema à droite
             let genemaIcon = new St.Icon({
                 gicon: Gio.icon_new_for_string(`${Me.path}/icons/GENAIMA-logo.png`),
                 style_class: 'searchbar-icon',
@@ -231,21 +226,16 @@ var SearchBar = GObject.registerClass(
             });
             contentContainer.add_child(genemaIcon);
     
-            // Ajouter le conteneur de contenu à la barre de recherche
             this._container.add_child(contentContainer);
     
-            // Ajouter la barre de recherche au stage
             if (!this._container.get_parent()) {
-                // Ajouter le conteneur au groupe backgroundGroup
                 Main.layoutManager._backgroundGroup.add_child(this._container);
 
-                // Réordonner les enfants pour placer le conteneur en arrière-plan
                 Main.layoutManager._backgroundGroup.set_child_below_sibling(this._container, null);
             }
     
             this.show();
     
-            // Positionner la barre de recherche au centre de l'écran
             this._container.connect('notify::allocation', () => {
                 this._center();
             });
@@ -364,7 +354,6 @@ var SearchBar = GObject.registerClass(
 
             entry.grab_key_focus();
 
-            // --- NOUVEAU: Gestionnaire de clic en dehors ---
             this._globalClickHandler = global.stage.connect('button-press-event', (actor, event) => {
                 // Vérifier si l'événement provient de l'overlay ou de la barre de recherche originale
                 if (!this._overlayBox.contains(event.get_source()) &&
@@ -396,7 +385,7 @@ var SearchBar = GObject.registerClass(
                 resultsBox.add_child(loadingLabel);
 
 
-                // 🚨 UTILISATION DE ASYNC/AWAIT
+                // UTILISATION DE ASYNC/AWAIT
                 engine.search(text).then((allResults) => {
                     
                     resultsBox.destroy_all_children(); // Effacer l'indicateur de chargement

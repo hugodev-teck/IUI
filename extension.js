@@ -12,6 +12,11 @@
 /*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
 /*                                                                */
 
+//----- TEMP --------
+// Nouveau : Gestionnaire de presse papier
+// Amélioration du gestionnaire de mise a jour
+// Fix : Plus besoin de saisir le mot de passe pour la déconnetion
+
 
 const NM = imports.gi.NM;
 const UPowerGlib = imports.gi.UPowerGlib;
@@ -38,6 +43,7 @@ const Shell = imports.gi.Shell;
 const Gvc = imports.gi.Gvc;
 const ModalDialog = imports.ui.modalDialog;
 const Soup = imports.gi.Soup;
+const Clipboard = Me.imports.clipboard;
 
 const BINDING_NAME = 'toggle-overview';
 const DUMMY_KEY = 'super-block';
@@ -71,20 +77,15 @@ class MyDock {
         this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`, "Menu principal");
         this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dt.png`, "DeskTools");
 
-        // Charger les applis depuis les préférences
         let apps = this.settings.get_strv('dock-apps');
         for (let desktop of apps) {
             this.addAppIcon(desktop);
         }
         
         this._addAddButton();
-        // Ajouter le conteneur au groupe backgroundGroup
         Main.layoutManager._backgroundGroup.add_child(this.container);
 
-        // Réordonner les enfants pour placer le conteneur en arrière-plan
         Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
-
-          // Se connecter au signal "notify::width" pour ajuster la position après que la taille soit définie
           this.container.connect('notify::allocation', () => {
             this._setPosition();
         });
@@ -138,11 +139,9 @@ class MyDock {
                 }
             }
 
-            if (event.get_button() === 3) {
-                // Action : Ajuster la fenêtre active
-                if (global.networkSetting) {
-                    global.networkSetting._fitWindowToDock();
-                }
+            // Clic Droit : Menu Déroulant
+            if (event.get_button() === 3) { 
+                this._toggleContextMenu(icon);
             }
         });
 
@@ -154,17 +153,60 @@ class MyDock {
         this.container.add_child(icon);
     }
 
+    _toggleContextMenu(sourceActor) {
+        if (this.customDockMenu) {
+            this.customDockMenu.destroy();
+            this.customDockMenu = null;
+            return;
+        }
+        let [iconX, iconY] = sourceActor.get_transformed_position();
+        let iconWidth = sourceActor.width;
+        let centerX = iconX + (iconWidth / 2);
+        let topY = iconY + 10;
+        this.customDockMenu = new CustomPopup(centerX, topY);
+
+        this.customDockMenu.addItem("Ajuster la fenêtre", () => {
+            if (global.networkSetting) global.networkSetting._fitWindowToDock();
+        }, "view-restore-symbolic");
+
+        this.customDockMenu.addItem("Presse-papier", () => {
+            
+            if (menu) { menu.destroy(); menu = null; }
+            if (global.networkSetting && typeof global.networkSetting._closeAllMenus === 'function') {
+                global.networkSetting._closeAllMenus();
+            }
+
+            if (global.clipboardManager) {
+                global.clipboardManager.toggleMenu(sourceActor);
+            } else if (Me.imports.clipboard) {
+                global.clipboardManager = new Me.imports.clipboard.ClipboardManager();
+                global.clipboardManager.toggleMenu(sourceActor);
+            }
+        }, "edit-paste-symbolic");
+
+        this.customDockMenu.addItem("Informations", () => {
+            let dialog = new AboutDialog();
+            dialog.open();
+        }, "dialog-information-symbolic");
+
+        this.customDockMenu.openUpwards(true);
+
+        let originalDestroy = this.customDockMenu.destroy.bind(this.customDockMenu);
+        this.customDockMenu.destroy = () => {
+            originalDestroy();
+            this.customDockMenu = null;
+        };
+    }
+
     _showTooltip(text, icon) {
         this.tooltip.set_text(text);
         this.tooltip.show();
 
-        // Positionner le label au-dessus du bouton
         let [x, y] = icon.get_transformed_position();
         let iconWidth = icon.width;
         let tooltipWidth = this.tooltip.width;
         let tooltipHeight = this.tooltip.height;
 
-        // centré horizontalement sur l'icône
         let posX = x + (iconWidth / 2) - (tooltipWidth / 2);
         // juste au-dessus du bouton
         let posY = y - tooltipHeight - 20;
@@ -201,7 +243,6 @@ class MyDock {
 
         this.addButton.connect('clicked', () => this._onAddButtonClicked());
 
-        // Tooltip au survol
         if (labelText) {
             this.addButton.connect('enter-event', () => {
                 this._showTooltip(labelText, this.addButton);
@@ -219,7 +260,6 @@ class MyDock {
         let icon = new St.Icon({ icon_name: iconName, icon_size: 40 });
         this.addButton.set_child(icon);
 
-        // Visuel pour les icônes en mode édition (suppression)
         let children = this.container.get_children();
         for (let child of children) {
             // Ne pas toucher le bouton "+"
@@ -241,14 +281,13 @@ class MyDock {
         if (global.networkSetting && global.networkSetting._closeAllMenus) {
             global.networkSetting._closeAllMenus();
         }
-        // Si on est en mode suppression, le désactive
+
         if (this._editMode) {
             this._editMode = false;
             this._updateAddIcon();
             return;
         }
 
-        // Sinon, ouvrir le menu d’ajout
         this._openAppChooser();
     }
 
@@ -259,7 +298,6 @@ class MyDock {
             return;
         }
 
-        // Créer un conteneur pour le menu
         this.popupMenu = new St.BoxLayout({
             vertical: true,
             style_class: 'app-chooser-menu',
@@ -268,7 +306,6 @@ class MyDock {
         });
         Main.uiGroup.add_child(this.popupMenu);
 
-        // Récupérer la position du bouton
         let [bx, by] = this.addButton.get_transformed_position();
         let buttonWidth = this.addButton.width;
         let buttonHeight = this.addButton.height;
@@ -276,20 +313,16 @@ class MyDock {
         let menuHeight = 400;
         let margin = 20;
 
-        // Calcul de la position centrée juste au-dessus
         let posX = bx + (buttonWidth / 2) - (menuWidth / 2);
         let posY = by - menuHeight - margin;
 
-        // Si le menu dépasse en haut de l’écran, on ajuste
         if (posY < 10) posY = 10;
 
-        // Application du positionnement et dimensions
         this.popupMenu.set_position(posX, posY);
         this.popupMenu.set_size(menuWidth, menuHeight);
 
-        // Option : mode suppression
         let editItem = new St.Button({
-            label: "🗑️ Passer en mode suppression",
+            label: "🗑️ Supprimer des logiciels",
             style_class: 'app-chooser-item'
         });
         editItem.connect('clicked', () => {
@@ -300,23 +333,9 @@ class MyDock {
         });
         this.popupMenu.add_child(editItem);
 
-        let VerItem = new St.Button({
-            label: "💻 Afficher les infos",
-            style_class: 'app-chooser-item'
-        });
-        VerItem.connect('clicked', () => {
-            let dialog = new AboutDialog();
-            dialog.open();
-            this.popupMenu.destroy();
-            this.popupMenu = null;
-        });
-        this.popupMenu.add_child(VerItem);
-
-        // Séparateur
-        let sep = new St.Label({ text: '───────────────' });
+        let sep = new St.Label({ text: '───────────────────────' });
         this.popupMenu.add_child(sep);
 
-        // Liste des applis
         let scroll = new St.ScrollView({
             style_class: 'app-chooser-scroll',
             hscrollbar_policy: St.PolicyType.NEVER,
@@ -358,7 +377,6 @@ class MyDock {
             list.add_child(item);
         }
 
-        // Fermer le menu si on clique ailleurs
         this._globalClickHandler = global.stage.connect('button-press-event', () => {
             if (this.popupMenu) {
                 this.popupMenu.destroy();
@@ -394,7 +412,6 @@ class MyDock {
         let iconImage = new St.Icon({ gicon: gicon, icon_size: 50 });
         icon.set_child(iconImage);
 
-        // tooltip
         icon.connect('enter-event', () => {
             this._showTooltip(appInfo.get_name(), icon);
         });
@@ -402,7 +419,6 @@ class MyDock {
             this._hideTooltip();
         });
 
-        // click normal / edit mode
         icon.connect('clicked', () => {
             this._hideTooltip();
 
@@ -421,13 +437,10 @@ class MyDock {
             }
         });
 
-        // Hover long -> afficher liste des fenêtres (5s)
         let hoverTimer = null;
         icon.connect('enter-event', () => {
-            // start timer only if not editing
             if (this._editMode) return;
 
-            // safety remove existing
             if (hoverTimer) {
                 try { GLib.Source.remove(hoverTimer); } catch(e) {}
                 hoverTimer = null;
@@ -441,14 +454,12 @@ class MyDock {
         });
 
         icon.connect('leave-event', () => {
-            // cancel timer if leaving before 5s
             if (hoverTimer) {
                 try { GLib.Source.remove(hoverTimer); } catch(e) {}
                 hoverTimer = null;
             }
         });
 
-        // insert before the add button so + stays last
         if (this.addButton) {
             let index = this.container.get_children().indexOf(this.addButton);
             if (index === -1)
@@ -479,7 +490,6 @@ class MyDock {
 }
 
     _showWindowList(appInfo, iconActor) {
-        // --- Fermer un ancien popup proprement ---
         if (this.windowListPopup) {
             try { this.windowListPopup.destroy(); } catch (e) {}
             this.windowListPopup = null;
@@ -489,7 +499,6 @@ class MyDock {
         const appId = appInfo?.get_id?.() || appInfo?.get_name?.() || 'unknown';
         this._popupState[appId] = { insidePopup: false, insideIcon: true };
 
-        // --- Récupérer les fenêtres associées ---
         let allWindows = global.get_window_actors().map(a => a.meta_window);
         let windows = allWindows.filter(w => {
             try {
@@ -694,7 +703,6 @@ class MyDock {
         menu.set_position(menuX, menuY);
         menu.set_size(menuWidth, menuHeight);
     
-        // Créer la barre de recherche
         let searchEntry = new St.Entry({
             style_class: 'search-entry',
             hint_text: 'Rechercher...',
@@ -704,13 +712,11 @@ class MyDock {
     
         menu.add_child(searchEntry);
     
-        // Créer un label pour le texte en haut de la liste
         let headerLabel = new St.Label({
             text: "Liste des Applications",
             style_class: 'header-text'
         });
     
-        // Ajouter le label en haut du menu
         menu.add_child(headerLabel);
     
         let scrollView = new St.ScrollView({
@@ -736,7 +742,6 @@ class MyDock {
             let appName = appInfo.get_display_name();
             let firstLetter = appName[0].toUpperCase();
     
-            // Ajouter un en-tête pour chaque nouvelle lettre
             if (firstLetter !== currentLetter) {
                 currentLetter = firstLetter;
                 let header = new St.Label({
@@ -744,7 +749,7 @@ class MyDock {
                     style_class: 'alphabet-header'
                 });
                 appList.add_child(header);
-                appItems.push({ header, type: 'header', visible: true }); // Ajouter l'en-tête à la liste d'éléments
+                appItems.push({ header, type: 'header', visible: true });
             }
     
             let appBox = new St.BoxLayout({
@@ -784,11 +789,10 @@ class MyDock {
             appList.remove_all_children();
     
             let currentLetter = null;
-            let anyAppsDisplayed = false; // Vérifier si des applications sont affichées après le filtrage
+            let anyAppsDisplayed = false;
     
             appItems.forEach(({ header, appBox, appInfo, type }) => {
                 if (type === 'header') {
-                    // Ajouter l'en-tête si nécessaire et si des applications correspondantes sont trouvées
                     let hasMatchingApps = appItems.some(({ appInfo }) => appInfo && appInfo.get_display_name().toLowerCase().startsWith(header.text.toLowerCase()) && appInfo.get_display_name().toLowerCase().includes(searchText));
     
                     header.visible = hasMatchingApps;
@@ -797,7 +801,6 @@ class MyDock {
                         currentLetter = header.text;
                     }
                 } else if (type === 'app' && appInfo.get_display_name().toLowerCase().includes(searchText)) {
-                    // Ajouter l'application filtrée
                     let appName = appInfo.get_display_name();
                     let firstLetter = appName[0].toUpperCase();
     
@@ -869,10 +872,8 @@ class MyDock {
 
 class NetworkSetting {
         constructor() {
-        // Assurez-vous que ce chemin est EXACT (majuscules/minuscules comptent sur Linux)
         this._iconsPath = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/wthicon`;
 
-        // --- 1. CRÉATION DES BOUTONS ---
         this.container = new St.BoxLayout({
             style_class: 'network-settings-container',
             vertical: false
@@ -1427,18 +1428,16 @@ class NetworkSetting {
     _getSetting(schema, settingKey) {
         try {
             let settings = Gio.Settings.new(schema);
-            // Retourne la valeur de la clé demandée
             return settings.get_value(settingKey).deep_unpack();
         } catch (e) {
             log(`Erreur lors de la récupération du paramètre ${settingKey}: ${e.message}`);
-            return null; // Retourne null en cas d'erreur
+            return null;
         }
     }
     
     _setSetting(schema, settingKey, value) {
         try {
             let settings = Gio.Settings.new(schema);
-            // Définit la valeur de la clé demandée
             settings.set_value(settingKey, GLib.Variant.new_boolean(value));
         } catch (e) {
             log(`Erreur lors de la définition du paramètre ${settingKey}: ${e.message}`);
@@ -1446,7 +1445,6 @@ class NetworkSetting {
     }
 
 async _accessibilityMenu() {
-        // Dimensions et positions
         let menuWidth = 280;
         let menuHeight = 310;
         let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
@@ -1454,7 +1452,6 @@ async _accessibilityMenu() {
         let topOffset = 110;
         let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
     
-        // Création du menu d'accessibilité
         let menu = new St.BoxLayout({
             vertical: true,
             style_class: 'net-box'
@@ -1473,7 +1470,6 @@ async _accessibilityMenu() {
         header.add_child(title);
         menu.add_child(header);
     
-        // Liste des options d'accessibilité
         let optionsList = new St.BoxLayout({
             vertical: true,
             style_class: 'options-list'
@@ -1481,13 +1477,11 @@ async _accessibilityMenu() {
     
         menu.add_child(optionsList);
     
-        // Liste des paramètres d'accessibilité avec leurs clés et schémas
         let settings = [
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-keyboard-enabled', name: 'Clavier à l\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-magnifier-enabled', name: 'Loupe d\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-reader-enabled', name: 'Lecteur d\'écran' },
             { schema: 'org.gnome.desktop.a11y.interface', key: 'high-contrast', name: 'Contraste élevé' }
-            // Ajouter d'autres paramètres selon vos besoins
         ];
     
         settings.forEach(setting => {
@@ -1501,7 +1495,6 @@ async _accessibilityMenu() {
                 style_class: 'option-label'
             });
     
-            // Crée un bouton pour activer/désactiver
             let button = new St.Button({
                 style_class: 'option-button',
                 reactive: true
@@ -1721,7 +1714,7 @@ _handleBarClick() {
         let rebootBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-reboot-symbolic' }) });
         let shutdownBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-shutdown-symbolic' }) });
 
-        logoutBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl restart gdm'); });
+        logoutBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('gnome-session-quit --logout'); });
         rebootBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl reboot'); });
         shutdownBtn.connect('clicked', () => { menunet.destroy(); menunet = null; GLib.spawn_command_line_async('systemctl poweroff'); });
 
@@ -1864,13 +1857,91 @@ const UpdateManager = class {
             "time.js",
             "stylesheet.css",
             "schemas/gschemas.compiled",
-            "metadata.json"
+            "metadata.json",
+            "clipboard.js"
         ];
-        if (Soup.Session.new) {
+        if (typeof Soup.Session.new === 'function') {
             this._session = new Soup.Session(); 
         } else {
             this._session = new Soup.SessionAsync(); 
         }
+    }
+
+    async ensureIntegrity() {
+        let missingFiles = false;
+
+        for (let filename of this.filesToUpdate) {
+            let localPath = GLib.build_filenamev([Me.dir.get_path(), filename]);
+            let file = Gio.File.new_for_path(localPath);
+            
+            if (!file.query_exists(null)) {
+                missingFiles = true;
+                break;
+            }
+        }
+
+        if (!missingFiles) return;
+
+        let monitor = Gio.NetworkMonitor.get_default();
+        if (!monitor.network_available) return;
+
+        let userAccepted = await this._askUserToDownload();
+
+        if (userAccepted) {
+            try {
+                await this.updateAll();
+                Main.notify("PrismUI", "Fichiers manquants téléchargés avec succès.");
+            } catch (e) {
+                log(e.message);
+            }
+        } else {
+            const syslogo = "preferences-system"
+            notificationManager.showNotification("IUI - Oh Oh !", "Votre installation est corrompu !", "Gestionnaire des mises à jour", syslogo);
+        }
+    }
+
+    _askUserToDownload() {
+        return new Promise((resolve) => {
+            let dialog = new ModalDialog.ModalDialog({
+                styleClass: 'prompt-dialog',
+                destroyOnClose: true
+            });
+
+            let content = new St.BoxLayout({ vertical: true });
+            
+            let title = new St.Label({ 
+                text: "Fichiers système manquants", 
+                style_class: 'prompt-dialog-headline' 
+            });
+            let body = new St.Label({ 
+                text: "Certains fichiers essentiels de PrismUI sont manquants. Voulez-vous les télécharger et réparer l'extension maintenant ? (Internet requis)",
+                style_class: 'prompt-dialog-description' 
+            });
+
+            content.add_child(title);
+            content.add_child(body);
+            dialog.contentLayout.add_child(content);
+
+            dialog.addButton({
+                label: "Annuler",
+                action: () => {
+                    dialog.close();
+                    resolve(false);
+                },
+                key: Clutter.KEY_Escape
+            });
+
+            dialog.addButton({
+                label: "Télécharger et Réparer",
+                action: () => {
+                    dialog.close();
+                    resolve(true);
+                },
+                default: true
+            });
+
+            dialog.open();
+        });
     }
 
     checkUpdates() {
@@ -1878,7 +1949,6 @@ const UpdateManager = class {
             let remoteUrl = this.baseUrl + "metadata.json";
             let message = Soup.Message.new('GET', remoteUrl);
 
-            // Fonction de traitement de la réponse
             const onResponse = (bytes) => {
                 try {
                     let jsonContent = new TextDecoder().decode(bytes);
@@ -1887,15 +1957,13 @@ const UpdateManager = class {
                     let currentVersion = parseFloat(Me.metadata.version);
                     let remoteVersion = parseFloat(remoteMetadata.version);
 
-                    log(`[PrismUI Update] Version locale: ${currentVersion}, Version distante: ${remoteVersion}`);
-
                     if (remoteVersion > currentVersion) {
-                        resolve(true); // Mise à jour disponible
+                        resolve(true);
                     } else {
-                        resolve(false); // Déjà à jour
+                        resolve(false);
                     }
                 } catch (e) {
-                    reject(new Error("Erreur lecture metadata distant: " + e.message));
+                    reject(new Error(e.message));
                 }
             };
 
@@ -1903,13 +1971,13 @@ const UpdateManager = class {
                 this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                     try {
                         let bytes = session.send_and_read_finish(res);
-                        if (message.status_code !== 200) { reject(new Error(`HTTP ${message.status_code}`)); return; }
-                        onResponse(bytes.get_data()); // GBytes to Uint8Array
+                        if (message.status_code !== 200) { reject(new Error(`${message.status_code}`)); return; }
+                        onResponse(bytes.get_data());
                     } catch (e) { reject(e); }
                 });
             } else {
                 this._session.queue_message(message, (session, msg) => {
-                    if (msg.status_code !== 200) { reject(new Error(`HTTP ${msg.status_code}`)); return; }
+                    if (msg.status_code !== 200) { reject(new Error(`${msg.status_code}`)); return; }
                     let body = msg.response_body.data; 
                     onResponse(body);
                 });
@@ -1924,11 +1992,17 @@ const UpdateManager = class {
             let file = Gio.File.new_for_path(localPath);
             let message = Soup.Message.new('GET', remoteUrl);
 
+            let parent = file.get_parent();
+            if (parent && !parent.query_exists(null)) {
+                try {
+                    parent.make_directory_with_parents(null);
+                } catch (e) {}
+            }
+
             const writeToFile = (bytes) => {
                 file.replace_contents_async(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (f, r) => {
                     try {
                         f.replace_contents_finish(r);
-                        log(`[PrismUI Update] Fichier mis à jour : ${file.get_basename()}`);
                         resolve(file.get_basename());
                     } catch (err) { reject(err); }
                 });
@@ -1938,13 +2012,13 @@ const UpdateManager = class {
                 this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                     try {
                         let bytes = session.send_and_read_finish(res);
-                        if (message.status_code !== 200) { reject(new Error(`HTTP ${message.status_code}`)); return; }
+                        if (message.status_code !== 200) { reject(new Error(`${message.status_code}`)); return; }
                         writeToFile(bytes);
                     } catch (e) { reject(e); }
                 });
             } else {
                 this._session.queue_message(message, (session, msg) => {
-                    if (msg.status_code !== 200) { reject(new Error(`HTTP ${msg.status_code}`)); return; }
+                    if (msg.status_code !== 200) { reject(new Error(`${msg.status_code}`)); return; }
                     writeToFile(msg.response_body.flatten());
                 });
             }
@@ -1952,13 +2026,132 @@ const UpdateManager = class {
     }
 
     async updateAll() {
-        log("[PrismUI Update] Démarrage du téléchargement...");
         let promises = [];
         for (let file of this.filesToUpdate) { promises.push(this._downloadFile(file)); }
         await Promise.all(promises);
-        log("[PrismUI Update] Terminé.");
     }
 };
+
+/* --- CLASSE UTILITAIRE GÉNÉRIQUE POUR MENU CONTEXTUEL DEROULANT --- */
+class CustomPopup {
+    constructor(x, y) {
+        this.actor = new St.BoxLayout({
+            style_class: 'dock-context-menu',
+            vertical: true,
+            reactive: true
+        });
+        
+        this._x = x;
+        this._y = y;
+        this._isOpen = false;
+        this._globalEvent = null;
+
+        Main.uiGroup.add_child(this.actor);
+    }
+
+    addItem(labelText, callback, iconName = null) {
+        let button = new St.Button({
+            style_class: 'popup-menu-item',
+            reactive: true,
+            x_align: St.Align.START,
+            y_align: St.Align.MIDDLE,
+            can_focus: true,
+            track_hover: true // Ajout pour le survol natif
+        });
+
+        let box = new St.BoxLayout({ vertical: false, style: 'padding: 8px;' });
+        
+        if (iconName) {
+            let icon = new St.Icon({ icon_name: iconName, icon_size: 16, style: 'margin-right: 10px;' });
+            box.add_child(icon);
+        }
+
+        let label = new St.Label({ text: labelText, y_align: Clutter.ActorAlign.CENTER });
+        box.add_child(label);
+        button.set_child(box);
+
+        button.connect('button-press-event', () => {
+            this.destroy(); 
+            if (callback) callback();
+            return Clutter.EVENT_STOP;
+        });
+
+        this.actor.add_child(button);
+    }
+
+    openUpwards(isCentered = false) {
+        this._isOpen = true;
+        this.actor.opacity = 0; // Invisible pendant le calcul
+        
+        Mainloop.idle_add(() => {
+            if (!this.actor) return false;
+
+            let menuHeight = this.actor.height;
+            let menuWidth = this.actor.width;
+
+            let finalY = this._y - menuHeight - 10;
+            
+            let finalX = this._x;
+            if (isCentered) {
+                finalX = this._x - (menuWidth / 2);
+            }
+
+            let monitor = Main.layoutManager.primaryMonitor;
+            
+            if (finalX + menuWidth > monitor.width) finalX = monitor.width - menuWidth - 10;
+            if (finalX < 10) finalX = 10;
+            if (finalY < 10) finalY = 10;
+
+            this.actor.set_position(finalX, finalY);
+            this.actor.opacity = 255; // On affiche
+            
+            this._setupClickOutside();
+            return false;
+        });
+    }
+
+    _setupClickOutside() {
+        if (this._globalEvent) {
+            global.stage.disconnect(this._globalEvent);
+            this._globalEvent = null;
+        }
+
+        Mainloop.timeout_add(100, () => {
+            if (!this.actor) return GLib.SOURCE_REMOVE;
+
+            this._globalEvent = global.stage.connect('button-press-event', (actor, event) => {
+
+                if (!this.actor) return Clutter.EVENT_PROPAGATE;
+
+                let target = event.get_source();
+                
+                let insideMenu = this.actor.contains(target) || this.actor === target;
+
+                if (!insideMenu) {
+                    this.destroy();
+                }
+
+                return Clutter.EVENT_PROPAGATE;
+            });
+            
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    destroy() {
+        if (this._globalEvent) {
+            global.stage.disconnect(this._globalEvent);
+            this._globalEvent = null;
+        }
+
+        if (this.actor) {
+            this.actor.destroy();
+            this.actor = null;
+        }
+        
+        this._isOpen = false;
+    }
+}
 
 function init() {
     if (global.myDock) {
@@ -1982,15 +2175,17 @@ function init() {
 function enable() {
     const syslogo = "preferences-system"
     notificationManager.showNotification("IUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.", "Système", syslogo);
-    // Créez une instance des paramètres de fond d'écran
     let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
-    // Sauvegardez l'URI du fond d'écran actuel
     originalWallpaperUri = backgroundSettings.get_string('picture-uri');
-    // Définissez le chemin vers l'image de fond d'écran personnalisée
     let wallpaperPath = GLib.build_filenamev([Me.dir.get_path(), 'icons', 'interface', 'wallpaper', 'officiel-wallpaper-prismUI.png']);
     let wallpaperUri = GLib.filename_to_uri(wallpaperPath, null);
     backgroundSettings.set_string('picture-uri', wallpaperUri);
     Main.panel.actor.hide();
+
+    global.clipboardManager = new Clipboard.ClipboardManager();
+
+    let integrityManager = new UpdateManager();
+    integrityManager.ensureIntegrity();
 
     closeOverviewTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
         if (Main.overview.visible) {
@@ -2003,6 +2198,11 @@ function enable() {
 function disable() {
 
     let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+
+    if (global.clipboardManager) {
+        global.clipboardManager.destroy(); // Arrête la boucle de surveillance
+        global.clipboardManager = null;
+    }
     // Rétablissez le fond d'écran original
     if (originalWallpaperUri) {
         backgroundSettings.set_string('picture-uri', originalWallpaperUri);
