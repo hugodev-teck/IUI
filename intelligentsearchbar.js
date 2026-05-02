@@ -1,57 +1,69 @@
-/*                                                                */
-/*       Copyright (c) Project PRISM. All rights reserved.        */
-/*         This software is licensed under the CC BY-NC           */
-/*          Full text of the license can be found at              */
-/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
-/*                                                                */
+/* */
+/* Copyright (c) Project PRISM. All rights reserved.        */
+/* This software is licensed under the CC BY-NC           */
+/* Full text of the license can be found at              */
+/* https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/* */
 
-const { St, GObject, Gio, Clutter } = imports.gi;
+const { St, GObject, Gio, Clutter, GLib } = imports.gi;
 const Main = imports.ui.main;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
-const GLib = imports.gi.GLib;
-const Util = imports.misc.util;
 
 const SEARCH_TYPE = {
     ALL: 'all',
     APP: 'app',
-    FILE: 'file'
+    SETTING: 'setting',
+    FILE: 'file',
+    FOLDER: 'folder',
+    WEB: 'web'
 };
 
-var LocalSearchEngine = class {
-    constructor() {
-        this.results = [];
+// --- ALGORITHME DE LEVENSHTEIN ---
+function getLevenshteinDistance(a, b) {
+    if (!a || !b) return 0;
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    let matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) matrix[i][j] = matrix[i - 1][j - 1];
+            else matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+        }
     }
-    
-    /**
-     * Recherche récursive ASYNCHRONE de fichiers et dossiers dans un répertoire donné.
-     * Utilise une approche itérative (pile) pour éviter les débordements de pile.
-     * @param {Gio.File} dirFile - Le répertoire à parcourir.
-     * @param {string} query - La requête de recherche en minuscules.
-     * @param {function} callback - Fonction appelée à chaque résultat trouvé (pour l'affichage progressif)
-     */
-    _searchDirectoryRecursively(dirFile, query) {
+    return matrix[b.length][a.length];
+}
+
+var LocalSearchEngine = class {
+    _calculateScore(query, target) {
+        let distance = getLevenshteinDistance(query.toLowerCase(), target.toLowerCase());
+        let maxLength = Math.max(query.length, target.length);
+        let score = 1 - (distance / maxLength);
+        if (target.toLowerCase().startsWith(query.toLowerCase())) score += 0.5;
+        return score;
+    }
+
+    _searchDirectoryRecursively(dirFile, lowerQuery, localResults) {
         return new Promise((resolve) => {
-            if (!dirFile.query_exists(null))
-                return resolve();
+            if (!dirFile.query_exists(null)) return resolve();
             
-            const MAX_DEPTH = 5; 
+            const MAX_DEPTH = 4; 
             let stack = [{ file: dirFile, depth: 0 }];
-            let finishedCount = 0;
             let activeScans = 0;
             
             const processNext = () => {
-                if (stack.length === 0 && activeScans === 0) {
-                    resolve();
-                    return;
-                }
+                if (stack.length === 0 && activeScans === 0) return resolve();
                 
-                while (stack.length > 0 && activeScans < 2) { 
+                let launchedScan = false;
+                
+                while (stack.length > 0 && activeScans < 3) { 
                     let { file: currentDir, depth } = stack.pop();
-
-                    if (depth >= MAX_DEPTH) continue;
+                    if (depth >= MAX_DEPTH) continue; 
                     
                     activeScans++;
+                    launchedScan = true;
 
                     currentDir.enumerate_children_async(
                         'standard::*',
@@ -60,419 +72,448 @@ var LocalSearchEngine = class {
                         null,
                         (dir, res) => {
                             activeScans--;
-                            
                             try {
                                 let enumerator = currentDir.enumerate_children_finish(res);
                                 let info;
-                                
                                 while ((info = enumerator.next_file(null)) !== null) {
                                     let name = info.get_name();
+                                    if (!name) continue;
+
                                     let fileType = info.get_file_type();
                                     let filePath = currentDir.get_path() + '/' + name;
+                                    let lowerName = name.toLowerCase();
                                     
-                                    if (name.toLowerCase().includes(query)) {
+                                    if (lowerName.includes(lowerQuery)) {
                                         let isDir = fileType === Gio.FileType.DIRECTORY;
                                         let contentType = isDir ? null : Gio.content_type_guess(filePath, null)[0];
-                                        let icon = isDir ? Gio.icon_new_for_string('folder-symbolic') : Gio.content_type_get_icon(contentType);
+                                        
+                                        let safeIcon = null;
+                                        if (isDir) safeIcon = Gio.icon_new_for_string('folder-symbolic');
+                                        else if (contentType) safeIcon = Gio.content_type_get_icon(contentType);
+                                        if (!safeIcon) safeIcon = Gio.icon_new_for_string('text-x-generic');
 
-                                        this.results.push({
-                                            type: SEARCH_TYPE.FILE,
+                                        localResults.push({
+                                            type: isDir ? SEARCH_TYPE.FOLDER : SEARCH_TYPE.FILE,
                                             name: name,
                                             path: filePath,
-                                            icon: icon
+                                            icon: safeIcon,
+                                            score: lowerName.startsWith(lowerQuery) ? 0.8 : 0.5
                                         });
                                     }
 
-                                    if (fileType === Gio.FileType.DIRECTORY) {
-                                        let subDir = Gio.File.new_for_path(filePath);
-                                        if (name !== '.' && name !== '..') {
-                                            stack.push({ file: subDir, depth: depth + 1 });
-                                        }
+                                    if (fileType === Gio.FileType.DIRECTORY && name !== '.' && name !== '..') {
+                                        stack.push({ file: Gio.File.new_for_path(filePath), depth: depth + 1 });
                                     }
                                 }
                                 enumerator.close(null);
-                            } catch (e) {
-                            }
-                            
-                            if (stack.length > 0 || activeScans > 0) {
-                                GLib.idle_add(GLib.PRIORITY_DEFAULT, processNext);
-                            } else {
-                                resolve();
-                            }
+                            } catch (e) {}
+
+                            if (stack.length > 0 || activeScans > 0) processNext();
+                            else resolve();
                         }
                     );
                 }
-                return GLib.SOURCE_REMOVE;
+                
+                if (!launchedScan && activeScans === 0) resolve();
             };
-            
             processNext();
         });
     }
 
-    /**
-     * Effectue la recherche d'applications (synchrone) et lance la recherche de fichiers (asynchrone).
-     * @returns {Promise<Array>}
-     */
     search(query) {
-        if (!query || query.trim().length < 2)
-            return Promise.resolve([]);
+        if (!query || query.trim().length < 2) return Promise.resolve([]);
+        let lowerQuery = query.toLowerCase();
+        let localResults = []; 
 
-        query = query.toLowerCase();
-        this.results = [];
+        Gio.AppInfo.get_all().forEach(app => {
+            if (app.should_show()) {
+                let name = app.get_name();
+                if (!name) return;
+                
+                let score = this._calculateScore(lowerQuery, name);
+                if (name.toLowerCase().includes(lowerQuery) || score > 0.5) {
+                    
+                    let categories = app.get_categories() || "";
+                    let appId = app.get_id() || "";
+                    let isSetting = categories.toLowerCase().includes('settings') || appId.toLowerCase().includes('settings');
 
-        const appDirs = [
-            '/usr/share/applications',
-            `${GLib.get_home_dir()}/.local/share/applications`
-        ];
-
-        for (let dir of appDirs) {
-            try {
-                let folder = Gio.File.new_for_path(dir);
-                let enumerator = folder.enumerate_children(
-                    'standard::*',
-                    Gio.FileQueryInfoFlags.NONE,
-                    null
-                );
-
-                let info;
-                while ((info = enumerator.next_file(null)) !== null) {
-                    let name = info.get_name();
-                    if (name.endsWith('.desktop')) {
-                        let appInfo = Gio.DesktopAppInfo.new_from_filename(`${dir}/${name}`);
-                        if (appInfo && appInfo.should_show()) {
-                            let appName = appInfo.get_name().toLowerCase();
-                            if (appName.includes(query)) {
-                                this.results.push({
-                                    type: SEARCH_TYPE.APP,
-                                    name: appInfo.get_name(),
-                                    icon: appInfo.get_icon(),
-                                    appInfo
-                                });
-                            }
-                        }
-                    }
+                    localResults.push({
+                        type: isSetting ? SEARCH_TYPE.SETTING : SEARCH_TYPE.APP,
+                        name: name,
+                        icon: app.get_icon() || Gio.icon_new_for_string('application-x-executable'),
+                        appInfo: app,
+                        score: score + 0.5
+                    });
                 }
-                enumerator.close(null);
-            } catch (e) {
-                logError(e);
             }
-        }
+        });
 
         const homeDirs = ['Documents', 'Bureau', 'Downloads', 'Téléchargements'];
-        let fileSearchPromises = [];
-        
-        for (let folderName of homeDirs) {
-            let dirPath = `${GLib.get_home_dir()}/${folderName}`;
-            let dirFile = Gio.File.new_for_path(dirPath);
-            
-            fileSearchPromises.push(this._searchDirectoryRecursively(dirFile, query));
-        }
+        let fileSearchPromises = homeDirs.map(folder => 
+            this._searchDirectoryRecursively(Gio.File.new_for_path(`${GLib.get_home_dir()}/${folder}`), lowerQuery, localResults)
+        );
         
         return Promise.all(fileSearchPromises).then(() => {
-            return this.results;
+            localResults.push({
+                type: SEARCH_TYPE.WEB,
+                name: `Rechercher "${query}" sur le Web`,
+                icon: Gio.icon_new_for_string("system-search-symbolic"),
+                score: 0.1,
+                action: () => Gio.AppInfo.launch_default_for_uri(`https://www.google.com/search?q=${encodeURIComponent(query)}`, null)
+            });
+
+            return localResults.sort((a, b) => b.score - a.score);
         });
     }
 };
 
-var SearchBar = GObject.registerClass(
-    class SearchBar extends GObject.Object {
-
+var AppLauncher = GObject.registerClass(
+    class AppLauncher extends GObject.Object {
         _init() {
             super._init();
-
             this._overlayBox = null;
-            this._globalClickHandler = null;
+            this._searchTimeout = null; 
             this._searchEngine = new LocalSearchEngine();
-            this._currentFilter = SEARCH_TYPE.ALL; // Filtre par défaut
+            this._currentFilter = SEARCH_TYPE.ALL;
+            
+            this._currentPage = 0;
+            this._appsPerPage = 24; 
+            this._allApps = [];
+        }
 
-            this._container = new St.BoxLayout({
-                style_class: 'searchbar-container',
-                vertical: false,
-                x_expand: true,
-                y_expand: true
-            });
-    
-            let contentContainer = new St.BoxLayout({
-                style_class: 'searchbar-content',
-                vertical: false,
-                x_expand: true,
-                y_expand: true,
-                reactive: true,
-                can_focus: true
-            });
-
-            contentContainer.connect('button-press-event', () => {
-                this._showOverlay();
-            });
-    
-            let searchIcon = new St.Icon({
-                gicon: Gio.icon_new_for_string(`${Me.path}/icons/interface/blcicon/search.png`),
-                style_class: 'searchbar-icon',
-                y_align: St.Align.MIDDLE
-            });
-            contentContainer.add_child(searchIcon);
-    
-            let searchText = new St.Label({
-                text: 'Cliquez pour rechercher',
-                style_class: 'searchbar-text',
-                y_align: St.Align.MIDDLE
-            });
-            contentContainer.add_child(searchText);
-    
-            let genemaIcon = new St.Icon({
-                gicon: Gio.icon_new_for_string(`${Me.path}/icons/GENAIMA-logo.png`),
-                style_class: 'searchbar-icon',
-                y_align: St.Align.MIDDLE
-            });
-            contentContainer.add_child(genemaIcon);
-    
-            this._container.add_child(contentContainer);
-    
-            if (!this._container.get_parent()) {
-                Main.layoutManager._backgroundGroup.add_child(this._container);
-
-                Main.layoutManager._backgroundGroup.set_child_below_sibling(this._container, null);
-            }
-    
-            this.show();
-    
-            this._container.connect('notify::allocation', () => {
-                this._center();
-            });
-        }
-    
-        _center() {
-            let monitor = Main.layoutManager.primaryMonitor;
-            let container = this._container;
-    
-            container.set_position(
-                Math.floor(((monitor.width - container.width) / 2)),
-                Math.floor(((monitor.height - container.height) / 2) - (monitor.height / 8))
-            );
-        }
-        
-        getWidget() {
-            return this._container;
-        }
-    
-        show() {
-            this._container.show();
-        }
-    
-        hide() {
-            this._container.hide();
-        }
-    
         toggle() {
-            if (this._container.visible) {
+            if (this._overlayBox) {
                 this.hide();
             } else {
                 this.show();
             }
         }
 
-
-        _showOverlay() {
+        show() {
             if (this._overlayBox) return;
 
-            this._overlayBox = new St.Widget({
-                style_class: 'search-overlay',
-                layout_manager: new Clutter.BinLayout(),
+            let monitor = Main.layoutManager.primaryMonitor;
+            if (!monitor) return;
+
+            this._overlayBox = new Clutter.Actor({ 
+                reactive: true, 
+                width: monitor.width,
+                height: monitor.height,
+                x: monitor.x,
+                y: monitor.y
+            });
+
+            this.bgClicker = new St.Button({
                 reactive: true,
-                can_focus: true,
-                x_expand: true,
-                y_expand: true,
+                width: monitor.width,
+                height: monitor.height,
+                style: 'background-color: transparent;'
             });
+            this.bgClicker.connect('clicked', () => this.hide());
+            this._overlayBox.add_child(this.bgClicker);
 
-            Main.layoutManager._backgroundGroup.add_child(this._overlayBox);
+            // TAILLES MISES À JOUR (760 de hauteur pour respirer)
+            let panelWidth = 900;
+            let panelHeight = 760;
+            let posX = monitor.x + Math.floor((monitor.width - panelWidth) / 2);
+            let posY = monitor.y + Math.floor((monitor.height - panelHeight) / 2);
 
-            let [x, y] = this._container.get_transformed_position();
-            let [width, height] = this._container.get_transformed_size();
-
-            const RESULTS_HEIGHT = 345; 
-            const PADDING_FOR_FILTERS = 70; 
-            const OVERLAY_HEIGHT = height + PADDING_FOR_FILTERS + RESULTS_HEIGHT; 
-
-            this._overlayBox.set_position(x - 10, y - 10);
-            this._overlayBox.set_size(width + 20, OVERLAY_HEIGHT);
-
-            const entry = new St.Entry({
-                hint_text: "Tapez votre recherche...",
-                style_class: 'searchbar-entry',
-                can_focus: true,
-                reactive: true,
-            });
-            this._overlayBox.add_child(entry);
-            entry.set_position(10, 10);
-            entry.set_size(width, height);
-
-            // --- Boîte de Filtres ---
-            const filterBox = new St.BoxLayout({
-                style_class: 'search-filter-box', 
-                vertical: false,
-            });
-            this._overlayBox.add_child(filterBox);
-            filterBox.set_position(10, height + 20); 
-            filterBox.set_size(width, 35); 
-
-            // --- Création des boutons de filtre ---
-            const filterButtons = {};
-            const createFilterButton = (label, type) => {
-                let button = new St.Button({
-                    label: label,
-                    style_class: `search-filter-btn ${type === this._currentFilter ? 'selected' : ''}`,
-                    reactive: true, 
-                    can_focus: true, 
-                    track_hover: true 
-                });
-                button.connect('clicked', () => {
-                    this._currentFilter = type;
-                    // Mise à jour visuelle
-                    Object.values(filterButtons).forEach(btn => btn.remove_style_class_name('selected'));
-                    button.add_style_class_name('selected');
-                    refreshResults();
-                });
-                filterButtons[type] = button;
-                filterBox.add_child(button);
-            };
-
-            createFilterButton("Tout", SEARCH_TYPE.ALL);
-            createFilterButton("Applications", SEARCH_TYPE.APP);
-            createFilterButton("Fichiers & Dossiers", SEARCH_TYPE.FILE);
-
-
-            // --- Boîte de Résultats ---
-            const resultsBox = new St.BoxLayout({
-                style_class: 'searchbar-results',
+            this.mainPanel = new St.BoxLayout({
+                style_class: 'prism-launcher-dialog', 
                 vertical: true,
+                reactive: true,
+                width: panelWidth,
+                height: panelHeight,
+                x: posX,
+                y: posY
+            });
+
+            let contentLayout = new St.BoxLayout({
+                vertical: true,
+                style_class: 'prism-launcher-content',
                 x_expand: true,
-                y_expand: true,
-            });
-            this._overlayBox.add_child(resultsBox);
-            resultsBox.set_position(10, height + 60); 
-            resultsBox.set_size(width, RESULTS_HEIGHT);
-
-            entry.grab_key_focus();
-
-            this._globalClickHandler = global.stage.connect('button-press-event', (actor, event) => {
-                // Vérifier si l'événement provient de l'overlay ou de la barre de recherche originale
-                if (!this._overlayBox.contains(event.get_source()) &&
-                    !this._container.contains(event.get_source())) {
-                    
-                    this._hideOverlay();
-                    return Clutter.EVENT_STOP;
-                }
-                return Clutter.EVENT_PROPAGATE;
+                y_expand: true
             });
 
-            // --- Moteur de Recherche ---
-            const engine = this._searchEngine;
+            // --- BARRE DE RECHERCHE ---
+            let searchBox = new St.BoxLayout({ style_class: 'prism-launcher-search-box', vertical: false });
+            let searchIcon = new St.Icon({ gicon: Gio.icon_new_for_string('system-search-symbolic'), icon_size: 24, style_class: 'prism-launcher-icon' });
             
-            // Fonction de rafraîchissement des résultats
-            const refreshResults = () => {
-                const text = entry.get_text();
-                if (!text || text.trim().length < 2) {
-                    resultsBox.destroy_all_children();
+            this.searchEntry = new St.Entry({ 
+                hint_text: "Rechercher une application, un fichier...", 
+                style_class: 'prism-launcher-entry', 
+                can_focus: true
+            });
+            this.searchEntry.set_width(800);
+            
+            searchBox.add_child(searchIcon);
+            searchBox.add_child(this.searchEntry);
+            contentLayout.add_child(searchBox);
+
+            // --- BARRE DES FILTRES ---
+            this.filterBox = new St.BoxLayout({ style_class: 'prism-launcher-filters', vertical: false });
+            
+            const createBtn = (label, type) => {
+                let btn = new St.Button({ 
+                    label: label, 
+                    style_class: `prism-filter-btn ${type === this._currentFilter ? 'selected' : ''}`, 
+                    reactive: true 
+                });
+                btn.connect('clicked', () => {
+                    this._currentFilter = type;
+                    this.filterBox.get_children().forEach(c => c.remove_style_class_name('selected'));
+                    btn.add_style_class_name('selected');
+                    if (this.searchEntry.get_text().length > 0) {
+                        this._triggerSearch(this.searchEntry.get_text());
+                    }
+                });
+                this.filterBox.add_child(btn);
+            };
+            
+            createBtn("Tout", SEARCH_TYPE.ALL);
+            createBtn("Apps", SEARCH_TYPE.APP);
+            createBtn("Paramètres", SEARCH_TYPE.SETTING);
+            createBtn("Fichiers", SEARCH_TYPE.FILE);
+            createBtn("Dossiers", SEARCH_TYPE.FOLDER);
+            createBtn("Web", SEARCH_TYPE.WEB);
+            
+            contentLayout.add_child(this.filterBox);
+            this.filterBox.hide(); 
+
+            // --- CONTENEUR CENTRAL : ESPACE AGRANDI À 580px ---
+            this.innerBox = new St.BoxLayout({ vertical: true }); 
+            this.innerBox.set_height(580); 
+            contentLayout.add_child(this.innerBox);
+
+            // --- BARRE DE NAVIGATION ---
+            this.navBar = new St.BoxLayout({ style_class: 'prism-launcher-navbar', vertical: false, x_align: Clutter.ActorAlign.CENTER });
+            
+            this.btnPrev = new St.Button({ label: '◀ Précédent', style_class: 'prism-nav-btn', reactive: true });
+            this.btnPrev.connect('clicked', () => {
+                if (this._currentPage > 0) {
+                    this._currentPage--;
+                    this._showAppGrid();
+                }
+            });
+
+            this.btnClose = new St.Button({ label: '✖ Fermer', style_class: 'prism-nav-btn close-btn', reactive: true });
+            this.btnClose.connect('clicked', () => this.hide());
+
+            this.btnNext = new St.Button({ label: 'Suivant ▶', style_class: 'prism-nav-btn', reactive: true });
+            this.btnNext.connect('clicked', () => {
+                let maxPage = Math.ceil(this._allApps.length / this._appsPerPage) - 1;
+                if (this._currentPage < maxPage) {
+                    this._currentPage++;
+                    this._showAppGrid();
+                }
+            });
+
+            this.navBar.add_child(this.btnPrev);
+            this.navBar.add_child(this.btnClose);
+            this.navBar.add_child(this.btnNext);
+            contentLayout.add_child(this.navBar);
+
+            // Assemblage Final
+            this.mainPanel.add_child(contentLayout);
+            this._overlayBox.add_child(this.mainPanel);
+            
+            Main.uiGroup.add_child(this._overlayBox);
+
+            // ÉVÉNEMENTS
+            this.searchEntry.clutter_text.connect('text-changed', () => this._onSearchChanged());
+            this.searchEntry.clutter_text.connect('key-press-event', (a, e) => {
+                if (e.get_key_symbol() === Clutter.KEY_Escape) this.hide();
+            });
+
+            this.searchEntry.set_text('');
+            this._currentPage = 0;
+            this._currentFilter = SEARCH_TYPE.ALL; 
+            this.filterBox.get_children().forEach(c => c.remove_style_class_name('selected'));
+            this.filterBox.get_children()[0].add_style_class_name('selected'); 
+
+            this._allApps = Gio.AppInfo.get_all()
+                .filter(a => a.should_show())
+                .sort((a, b) => a.get_display_name().localeCompare(b.get_display_name()));
+
+            this._showAppGrid();
+
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+                this.searchEntry.grab_key_focus();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+
+        _onSearchChanged() {
+            if (this._searchTimeout) {
+                GLib.source_remove(this._searchTimeout);
+            }
+
+            let text = this.searchEntry.get_text();
+            
+            if (text.length === 0) {
+                this._showAppGrid();
+                return;
+            }
+
+            this._searchTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+                this._triggerSearch(text);
+                this._searchTimeout = null;
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+
+        _updateNavButtons() {
+            let maxPage = Math.ceil(this._allApps.length / this._appsPerPage) - 1;
+            this.btnPrev.opacity = this._currentPage > 0 ? 255 : 100;
+            this.btnPrev.reactive = this._currentPage > 0;
+            this.btnNext.opacity = this._currentPage < maxPage ? 255 : 100;
+            this.btnNext.reactive = this._currentPage < maxPage;
+        }
+
+        _showAppGrid() {
+            this.filterBox.hide();
+            this.navBar.show();
+            this.innerBox.destroy_all_children();
+            this._updateNavButtons();
+
+            let maxCols = 6; 
+            let currentRow = null;
+
+            let startIndex = this._currentPage * this._appsPerPage;
+            let pageApps = this._allApps.slice(startIndex, startIndex + this._appsPerPage);
+
+            pageApps.forEach((app, index) => {
+                if (index % maxCols === 0) {
+                    currentRow = new St.BoxLayout({ 
+                        vertical: false, 
+                        style_class: 'prism-launcher-row',
+                        height: 135, // Ligne légèrement plus haute
+                        x_align: Clutter.ActorAlign.CENTER // LE FIX : Force la ligne et son contenu au centre de la fenêtre !
+                    });
+                    this.innerBox.add_child(currentRow);
+                }
+
+                let appBtn = new St.Button({ 
+                    style_class: 'prism-launcher-card', 
+                    reactive: true, 
+                    can_focus: true 
+                });
+                appBtn.set_width(130);
+                appBtn.set_height(125);
+
+                let cardBox = new St.BoxLayout({ vertical: true });
+                
+                let icon = new St.Icon({ 
+                    gicon: app.get_icon() || Gio.icon_new_for_string('application-x-executable'), 
+                    icon_size: 72, 
+                    style_class: 'prism-card-icon',
+                    x_align: Clutter.ActorAlign.CENTER 
+                });
+
+                let name = app.get_display_name();
+                let safeName = name.length > 15 ? name.substring(0, 13) + '...' : name;
+
+                let nameLabel = new St.Label({ 
+                    text: safeName, 
+                    style_class: 'prism-card-label',
+                    x_align: Clutter.ActorAlign.CENTER 
+                });
+
+                cardBox.add_child(icon);
+                cardBox.add_child(nameLabel);
+                appBtn.set_child(cardBox);
+
+                appBtn.connect('clicked', () => {
+                    app.launch([], null);
+                    this.hide();
+                });
+
+                currentRow.add_child(appBtn);
+            });
+        }
+
+        async _triggerSearch(text) {
+            this.filterBox.show();
+            this.navBar.hide(); 
+            this.innerBox.destroy_all_children();
+            
+            try {
+                let allResults = await this._searchEngine.search(text);
+                
+                if (!this._overlayBox || this.searchEntry.get_text() !== text) return;
+
+                let filtered = allResults.filter(r => this._currentFilter === SEARCH_TYPE.ALL || r.type === this._currentFilter);
+
+                if (filtered.length === 0) {
+                    let empty = new St.Label({ text: "Aucun résultat", style_class: 'prism-launcher-empty', x_align: Clutter.ActorAlign.CENTER });
+                    this.innerBox.add_child(empty);
                     return;
                 }
-                
-                // Vider les résultats et afficher un indicateur de chargement
-                resultsBox.destroy_all_children();
-                let loadingLabel = new St.Label({
-                    text: 'Recherche en cours...',
-                    style: 'color: #999; padding: 10px;'
-                });
-                resultsBox.add_child(loadingLabel);
 
-
-                // UTILISATION DE ASYNC/AWAIT
-                engine.search(text).then((allResults) => {
-                    
-                    resultsBox.destroy_all_children(); // Effacer l'indicateur de chargement
-                    
-                    // Filtrer les résultats selon le filtre actif
-                    let filteredResults = allResults.filter(r => 
-                        this._currentFilter === SEARCH_TYPE.ALL || r.type === this._currentFilter
-                    );
-
-                    for (let r of filteredResults.slice(0, 9)) {
-                        // Création de la ligne de résultat
-                        let row = new St.BoxLayout({ 
-                            style_class: 'search-result-row',
-                            reactive: true,       
-                            can_focus: true,      
-                            track_hover: true     
-                        });
-
-                        let icon = new St.Icon({
-                            gicon: r.icon,
-                            icon_size: 24,
-                            style_class: 'search-result-icon'
-                        });
-
-                        let label = new St.Label({
-                            text: `${r.name}`,
-                            y_align: Clutter.ActorAlign.CENTER
-                        });
-
-                        row.add_child(icon);
-                        row.add_child(label);
-
-                        row.connect('button-press-event', () => {
-                            try {
-                                if (r.type === SEARCH_TYPE.APP && r.appInfo)
-                                    r.appInfo.launch([], null);
-                                else if (r.type === SEARCH_TYPE.FILE)
-                                    Gio.AppInfo.launch_default_for_uri(`file://${r.path}`, null); 
-                            } catch (e) { logError(e); }
-
-                            this._hideOverlay();
-                        });
-
-                        resultsBox.add_child(row);
-                    }
-                    
-                    if (filteredResults.length === 0) {
-                         let noResultsLabel = new St.Label({
-                            text: 'Aucun résultat trouvé.',
-                            style: 'color: #999; padding: 10px;'
-                        });
-                        resultsBox.add_child(noResultsLabel);
-                    }
-
-                }).catch(e => {
-                    logError(e, 'Erreur lors de la recherche asynchrone');
-                    resultsBox.destroy_all_children();
-                    let errorLabel = new St.Label({
-                        text: 'Erreur lors de la recherche.',
-                        style: 'color: red; padding: 10px;'
+                filtered.slice(0, 9).forEach(r => {
+                    let btn = new St.Button({ 
+                        style_class: 'prism-launcher-list-item', 
+                        reactive: true,
+                        x_align: Clutter.ActorAlign.CENTER // Centre les barres de résultats
                     });
-                    resultsBox.add_child(errorLabel);
+                    btn.set_width(840);
+
+                    let box = new St.BoxLayout({ vertical: false });
+                    
+                    let icon = new St.Icon({ gicon: r.icon, icon_size: 32, style_class: 'prism-list-icon' });
+                    
+                    let texts = new St.BoxLayout({ vertical: true });
+                    
+                    let name = r.name || "Inconnu";
+                    let safeName = name.length > 60 ? name.substring(0, 57) + '...' : name;
+                    
+                    let title = new St.Label({ text: safeName, style_class: 'prism-list-title' });
+                    
+                    let typeText = "";
+                    switch(r.type) {
+                        case SEARCH_TYPE.APP: typeText = "Application"; break;
+                        case SEARCH_TYPE.SETTING: typeText = "Paramètre"; break;
+                        case SEARCH_TYPE.FILE: typeText = "Fichier"; break;
+                        case SEARCH_TYPE.FOLDER: typeText = "Dossier"; break;
+                        case SEARCH_TYPE.WEB: typeText = "Internet"; break;
+                        default: typeText = "Inconnu";
+                    }
+
+                    let subtitle = new St.Label({ text: typeText, style_class: 'prism-list-subtitle' });
+                    
+                    texts.add_child(title);
+                    texts.add_child(subtitle);
+                    
+                    box.add_child(icon);
+                    box.add_child(texts);
+                    btn.set_child(box);
+
+                    btn.connect('clicked', () => {
+                        if (r.type === SEARCH_TYPE.APP || r.type === SEARCH_TYPE.SETTING) r.appInfo.launch([], null);
+                        else if (r.type === SEARCH_TYPE.FILE || r.type === SEARCH_TYPE.FOLDER) Gio.AppInfo.launch_default_for_uri(`file://${r.path}`, null);
+                        else if (r.type === SEARCH_TYPE.WEB) r.action();
+                        this.hide();
+                    });
+
+                    this.innerBox.add_child(btn);
                 });
-            };
-
-            // écoute du texte tapé
-            entry.clutter_text.connect('text-changed', refreshResults);
-
-            entry.clutter_text.connect('key-press-event', (actor, event) => {
-                if (event.get_key_symbol() === Clutter.KEY_Escape) {
-                    this._hideOverlay();
-                    return Clutter.EVENT_STOP;
-                }
-                return Clutter.EVENT_PROPAGATE;
-            });
-        }
-
-        _hideOverlay() {
-            if (this._overlayBox) {
-                if (this._globalClickHandler) {
-                    global.stage.disconnect(this._globalClickHandler);
-                    this._globalClickHandler = null;
-                }
-                
-                Main.layoutManager._backgroundGroup.remove_child(this._overlayBox);
-                this._overlayBox = null;
-                this._currentFilter = SEARCH_TYPE.ALL;
+            } catch (e) {
+                console.error("PRISM Erreur de recherche: " + e);
             }
         }
-    });
+
+        hide() {
+            if (this._overlayBox) {
+                global.stage.set_key_focus(null);
+
+                if (this._searchTimeout) {
+                    GLib.source_remove(this._searchTimeout);
+                    this._searchTimeout = null;
+                }
+                
+                this._overlayBox.destroy();
+                this._overlayBox = null;
+            }
+        }
+    }
+);

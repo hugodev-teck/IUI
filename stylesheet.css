@@ -908,3 +908,198 @@
     color: #aaaaaa;
     margin-bottom: 20px;
 }
+
+.searchbar-results-scroll {
+    max-height: 380px;
+    margin-top: 10px;
+}
+
+.search-result-row {
+    margin: 2px 5px;
+    transition: all 0.2s;
+}
+
+.searchbar-results-scroll StScrollBar StBin {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+.searchbar-results-scroll StScrollBar StButton {
+    background-color: rgba(255, 255, 255, 0.3);
+    border-radius: 4px;
+}
+
+.prism-launcher-overlay {
+    background-color: rgba(0, 0, 0, 0.6);
+}
+
+/* --- LE MODAL DIALOG LAUNCHER --- */
+.prism-launcher-dialog {
+    background-color: rgba(30, 30, 30, 0.95);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8);
+    width: 780px;
+    height: 760px;
+}
+
+.prism-launcher-content {
+    padding: 10px;
+    spacing: 15px;
+}
+
+/* Barre de recherche */
+.prism-launcher-search-box {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 10px 15px;
+    align-items: center;
+}
+
+.prism-launcher-icon {
+    color: #aaaaaa;
+    margin-right: 12px;
+}
+
+.prism-launcher-entry {
+    color: #ffffff;
+    font-size: 18px;
+    background-color: transparent;
+    border: none;
+    caret-color: #ffffff;
+}
+.prism-launcher-entry:focus {
+    box-shadow: none;
+}
+
+/* Zone de contenu ScrollView */
+.prism-launcher-scroll {
+    padding-right: 10px;
+}
+
+/* --- LA GRILLE --- */
+.prism-launcher-row {
+    spacing: 15px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.prism-launcher-card {
+    background-color: transparent;
+    border-radius: 12px;
+    padding: 15px 5px;
+    /* Largeur retirée pour laisser JS s'étendre proportionnellement */
+    transition-duration: 150ms;
+}
+
+.prism-launcher-card:hover, .prism-launcher-card:focus {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.prism-card-icon {
+    margin-bottom: 10px;
+}
+
+.prism-card-label {
+    color: #ffffff;
+    font-size: 14px; /* Augmenté de 12px à 14px */
+    text-align: center;
+    font-weight: bold; /* Mis en gras pour la lisibilité */
+}
+
+/* --- LES RÉSULTATS DE RECHERCHE --- */
+.prism-launcher-list-item {
+    background-color: transparent;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 5px;
+    transition-duration: 100ms;
+}
+
+.prism-launcher-list-item:hover, .prism-launcher-list-item:focus {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.prism-list-icon {
+    margin-right: 15px;
+}
+
+.prism-list-title {
+    color: #ffffff;
+    font-size: 16px;
+}
+
+.prism-list-subtitle {
+    color: #888888;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.prism-launcher-empty {
+    color: #888888;
+    font-size: 18px;
+    text-align: center;
+    padding-top: 40px;
+}
+
+/* --- FILTRES DE RECHERCHE --- */
+.prism-launcher-filters {
+    spacing: 10px;
+    margin-bottom: 15px;
+    justify-content: center;
+}
+
+.prism-filter-btn {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #aaaaaa;
+    padding: 6px 14px;
+    border-radius: 15px; /* Forme de pilule */
+    font-size: 13px;
+    border: 1px solid transparent;
+    transition-duration: 150ms;
+}
+
+.prism-filter-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+}
+
+.prism-filter-btn.selected {
+    background-color: #007bff; /* Bleu de sélection */
+    color: #ffffff;
+    font-weight: bold;
+    border-color: #ffffff;
+}
+
+/* --- BARRE DE NAVIGATION (Pagination) --- */
+.prism-launcher-navbar {
+    spacing: 20px;
+    margin-top: 10px;
+    justify-content: center;
+}
+
+.prism-nav-btn {
+    background-color: rgba(255, 255, 255, 0.05);
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 8px 20px;
+    font-size: 14px;
+    font-weight: bold;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    transition-duration: 150ms;
+}
+
+.prism-nav-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.prism-nav-btn.close-btn {
+    background-color: rgba(255, 85, 85, 0.2);
+    color: #ffaaaa;
+    border-color: rgba(255, 85, 85, 0.3);
+}
+
+.prism-nav-btn.close-btn:hover {
+    background-color: rgba(255, 85, 85, 0.4);
+    color: #ffffff;
+}

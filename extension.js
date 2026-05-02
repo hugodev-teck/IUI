@@ -28,7 +28,7 @@ const Lang = imports.lang;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
 const NotificationManager = Me.imports.notificationsys.NotificationManager;
-const SearchBar = Me.imports.intelligentsearchbar.SearchBar;
+const AppLauncher = Me.imports.intelligentsearchbar.AppLauncher;
 const TimeMachine = Me.imports.time.TimeMachine;
 const Util = imports.misc.util;
 const { ByteArray } = imports.byteArray;
@@ -73,6 +73,8 @@ class MyDock {
     }
     _constructbar(){
         this.container = new St.BoxLayout({ style_class: 'my-dock-container' });
+        this._editMode = false; // Initialisation de l'état
+        this.addButton = null;
 
         this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`, "Menu principal");
         this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dt.png`, "DeskTools");
@@ -81,8 +83,7 @@ class MyDock {
         for (let desktop of apps) {
             this.addAppIcon(desktop);
         }
-        
-        this._addAddButton();
+
         Main.layoutManager._backgroundGroup.add_child(this.container);
 
         Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
@@ -124,17 +125,12 @@ class MyDock {
                 if (pressDuration >= longPressDuration) {
                     this._shutdownPC();
                 } else {
-                    if (menu) {
-                        menu.destroy();
-                        menu = null;
-                        if (global.networkSetting && global.networkSetting._closeAllMenus) {
-                            global.networkSetting._closeAllMenus();
-                        }
-                    } else {
-                        menu = this._openAppMenu();
-                        if (global.networkSetting && global.networkSetting._closeAllMenus) {
-                            global.networkSetting._closeAllMenus();
-                        }
+                    // --- NOUVEAU : On ouvre/ferme le Launcher ---
+                    if (global.appLauncher) {
+                        global.appLauncher.toggle();
+                    }
+                    if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                        global.networkSetting._closeAllMenus();
                     }
                 }
             }
@@ -189,6 +185,26 @@ class MyDock {
             dialog.open();
         }, "dialog-information-symbolic");
 
+        const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
+
+        this.customDockMenu.addItem("Ajouter/modifier des logiciel a la barre de tache", () => {
+            if (menu) {
+                menu.destroy();
+                menu = null;
+            }
+            if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                global.networkSetting._closeAllMenus();
+            }
+
+            if (this._editMode) {
+                this._editMode = false;
+                this._updateAddIcon();
+                return;
+            }
+
+            this._openAppChooser();
+        }, iconName)
+
         this.customDockMenu.openUpwards(true);
 
         let originalDestroy = this.customDockMenu.destroy.bind(this.customDockMenu);
@@ -236,59 +252,21 @@ class MyDock {
         });
     }
 
-    _addAddButton() {
-        let labelText = 'Ajouter/Supprimer des applications';
-        this.addButton = new St.Button({ style_class: 'app-icon' });
-        this._updateAddIcon();
-
-        this.addButton.connect('clicked', () => this._onAddButtonClicked());
-
-        if (labelText) {
-            this.addButton.connect('enter-event', () => {
-                this._showTooltip(labelText, this.addButton);
-            });
-            this.addButton.connect('leave-event', () => {
-                this._hideTooltip();
-            });
-        }
-
-        this.container.add_child(this.addButton);
-    }
-
     _updateAddIcon() {
-        const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
-        let icon = new St.Icon({ icon_name: iconName, icon_size: 40 });
-        this.addButton.set_child(icon);
-
+        // Si le bouton n'est pas sur le dock, on met juste à jour le style des icônes existantes
         let children = this.container.get_children();
         for (let child of children) {
-            // Ne pas toucher le bouton "+"
-            if (child === this.addButton)
-                continue;
-
             if (this._editMode)
                 child.add_style_class_name('edit-mode-app');
             else
                 child.remove_style_class_name('edit-mode-app');
         }
-    }
 
-    _onAddButtonClicked() {
-        if (menu) {
-            menu.destroy();
-            menu = null;
+        // Si jamais vous décidez d'afficher le bouton plus tard
+        if (this.addButton) {
+            const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
+            this.addButton.set_child(new St.Icon({ icon_name: iconName, icon_size: 40 }));
         }
-        if (global.networkSetting && global.networkSetting._closeAllMenus) {
-            global.networkSetting._closeAllMenus();
-        }
-
-        if (this._editMode) {
-            this._editMode = false;
-            this._updateAddIcon();
-            return;
-        }
-
-        this._openAppChooser();
     }
 
     _openAppChooser() {
@@ -306,17 +284,14 @@ class MyDock {
         });
         Main.uiGroup.add_child(this.popupMenu);
 
-        let [bx, by] = this.addButton.get_transformed_position();
-        let buttonWidth = this.addButton.width;
-        let buttonHeight = this.addButton.height;
+        // POSITIONNEMENT INTELLIGENT
+        let monitor = Main.layoutManager.primaryMonitor;
         let menuWidth = 240;
         let menuHeight = 400;
-        let margin = 20;
 
-        let posX = bx + (buttonWidth / 2) - (menuWidth / 2);
-        let posY = by - menuHeight - margin;
-
-        if (posY < 10) posY = 10;
+        // On le centre sur l'écran si addButton n'existe pas
+        let posX = Math.floor(monitor.x + (monitor.width - menuWidth) / 2);
+        let posY = Math.floor(monitor.y + (monitor.height - menuHeight) / 2);
 
         this.popupMenu.set_position(posX, posY);
         this.popupMenu.set_size(menuWidth, menuHeight);
@@ -688,169 +663,6 @@ class MyDock {
 
         this.container.insert_child_at_index(icon, 1);
     }
-
-    _openAppMenu() {
-        let menuWidth = Math.floor(Main.layoutManager.primaryMonitor.width * 0.35);
-        let menuHeight = Math.floor(Main.layoutManager.primaryMonitor.height * 0.65);
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.width - menuWidth) / 2);
-        let menuY = Math.floor((Main.layoutManager.primaryMonitor.height - menuHeight) / 2);
-    
-        let menu = new St.BoxLayout({
-            vertical: true,
-            style_class: 'app-menu'
-        });
-    
-        menu.set_position(menuX, menuY);
-        menu.set_size(menuWidth, menuHeight);
-    
-        let searchEntry = new St.Entry({
-            style_class: 'search-entry',
-            hint_text: 'Rechercher...',
-            can_focus: true,
-            x_expand: true
-        });
-    
-        menu.add_child(searchEntry);
-    
-        let headerLabel = new St.Label({
-            text: "Liste des Applications",
-            style_class: 'header-text'
-        });
-    
-        menu.add_child(headerLabel);
-    
-        let scrollView = new St.ScrollView({
-            style_class: 'app-menu-scrollview',
-            hscrollbar_policy: St.PolicyType.NEVER,
-            vscrollbar_policy: St.PolicyType.AUTOMATIC
-        });
-    
-        let appList = new St.BoxLayout({
-            vertical: true,
-            style_class: 'app-list'
-        });
-    
-        let appInfos = Gio.AppInfo.get_all();
-        let sortedAppInfos = appInfos.sort((a, b) => {
-            return a.get_display_name().localeCompare(b.get_display_name());
-        });
-    
-        let currentLetter = null;
-        let appItems = []; // Stocker les éléments d'application pour filtrage
-    
-        sortedAppInfos.forEach((appInfo) => {
-            let appName = appInfo.get_display_name();
-            let firstLetter = appName[0].toUpperCase();
-    
-            if (firstLetter !== currentLetter) {
-                currentLetter = firstLetter;
-                let header = new St.Label({
-                    text: currentLetter,
-                    style_class: 'alphabet-header'
-                });
-                appList.add_child(header);
-                appItems.push({ header, type: 'header', visible: true });
-            }
-    
-            let appBox = new St.BoxLayout({
-                style_class: 'app-box',
-                reactive: true,
-                can_focus: true,
-                visible: true
-            });
-    
-            let gicon = appInfo.get_icon();
-            let icon = new St.Icon({
-                gicon: gicon,
-                icon_size: 32,
-                style_class: 'app-icon'
-            });
-    
-            let label = new St.Label({
-                text: appName,
-                y_align: Clutter.ActorAlign.CENTER
-            });
-    
-            appBox.add_child(icon);
-            appBox.add_child(label);
-    
-            appBox.connect('button-press-event', () => {
-                appInfo.launch([], null);
-                menu.destroy();
-                menu = null;
-            });
-    
-            appList.add_child(appBox);
-            appItems.push({ appBox, appInfo, type: 'app', visible: true }); // Ajouter l'application à la liste d'éléments
-        });
-    
-        searchEntry.get_clutter_text().connect('text-changed', () => {
-            let searchText = searchEntry.get_text().toLowerCase();
-            appList.remove_all_children();
-    
-            let currentLetter = null;
-            let anyAppsDisplayed = false;
-    
-            appItems.forEach(({ header, appBox, appInfo, type }) => {
-                if (type === 'header') {
-                    let hasMatchingApps = appItems.some(({ appInfo }) => appInfo && appInfo.get_display_name().toLowerCase().startsWith(header.text.toLowerCase()) && appInfo.get_display_name().toLowerCase().includes(searchText));
-    
-                    header.visible = hasMatchingApps;
-                    if (hasMatchingApps) {
-                        appList.add_child(header);
-                        currentLetter = header.text;
-                    }
-                } else if (type === 'app' && appInfo.get_display_name().toLowerCase().includes(searchText)) {
-                    let appName = appInfo.get_display_name();
-                    let firstLetter = appName[0].toUpperCase();
-    
-                    if (firstLetter !== currentLetter) {
-                        currentLetter = firstLetter;
-                        let newHeader = new St.Label({
-                            text: currentLetter,
-                            style_class: 'alphabet-header'
-                        });
-                        appList.add_child(newHeader);
-                        currentLetter = firstLetter;
-                    }
-    
-                    appList.add_child(appBox);
-                    appBox.visible = true;
-                    anyAppsDisplayed = true;
-                } else {
-                    appBox.visible = false; // Masquer les applications qui ne correspondent pas
-                }
-            });
-    
-            // Masquer les en-têtes sans applications correspondantes après le filtrage
-            appItems.filter(item => item.type === 'header' && item.visible).forEach(({ header }) => {
-                if (!appList.get_children().includes(header)) {
-                    header.visible = false;
-                }
-            });
-    
-            // Afficher un message si aucune application n'est trouvée
-            if (!anyAppsDisplayed) {
-                let noResultsLabel = new St.Label({
-                    text: "Aucune application trouvée",
-                    style_class: 'no-results-label'
-                });
-                appList.add_child(noResultsLabel);
-            }
-        });
-    
-        scrollView.add_actor(appList);
-        menu.add_child(scrollView);
-    
-        Main.layoutManager.addChrome(menu);
-    
-        menu.connect('destroy', () => {
-            Main.layoutManager.removeChrome(menu);
-        });
-    
-        return menu;
-    }
-    
 
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
@@ -2162,14 +1974,13 @@ function init() {
         global.networkSetting.container.destroy();
         global.networkSetting = null;
     }
-    if (global.searchBar) {
-        global.searchBar.hide();
+    if (global.appLauncher) { // Modifié ici
+        global.appLauncher.hide();
     }
     global._timeMachine = new TimeMachine();
-    global.searchBar = new SearchBar();
+    global.appLauncher = new AppLauncher(); // Modifié ici
     global.networkSetting = new NetworkSetting();
     global.myDock = new MyDock();
-    
 }
 
 function enable() {
