@@ -51,10 +51,6 @@
     border-radius: 10px;
 }
 
-.app-menu-scrollview {
-    max-height: 100%;
-}
-
 .text-box {
     text-align: center;
     background-color: rgba(136, 136, 136, 0.459);
@@ -126,7 +122,6 @@
     margin-bottom: 5px;
 }
 
-/* Élément individuel de la liste des options */
 .option-item {
     background-color: transparent;
     padding: 10px;
@@ -136,7 +131,6 @@
     justify-content: space-between;
 }
 
-/* Nom de l'option */
 .option-name {
     font-size: 14px;
     margin-top: 10px;
@@ -232,10 +226,10 @@
     background-color: transparent;
     border-radius: 5px;
     padding: 10px;
-    max-height: 300px; /* Ajustez selon vos besoins */
+    max-height: 300px;
     overflow-y: auto;
     position: absolute;
-    bottom: 60px; /* Ajustez pour éviter la superposition avec le bouton de notification */
+    bottom: 60px;
     left: 20px;
     right: 20px;
 }
@@ -262,7 +256,6 @@
     cursor: pointer;
 }
 
-/* Styles pour le conteneur de la barre de volume */
 .volume-slider-container {
     background-color: #4c4c4c;
     border-radius: 4px;
@@ -272,18 +265,14 @@
     margin-right: 10px;
 }
 
-/* Styles pour la barre de volume */
 .volume-slider {
     background-color: #555;
-    height: 100%;
     position: relative;
 }
 
-/* Styles pour l'indicateur de volume */
 .volume-indicator {
     background-color: #d4d4d4;
-    height: 80%;
-    width: 0; /* Initialisé à 0, sera mis à jour dynamiquement */
+    width: 0;
     transition: width 0.1s;
     border-radius: 4px;
 }
@@ -422,38 +411,6 @@
     background-color: #505050;
 }
 
-.music-section {
-    background-color: #2a2a2a;
-    padding: 10px;
-    border-radius: 10px;
-    spacing: 5px;
-    align-items: center;
-}
-
-.music-title {
-    font-size: 14px;
-    font-weight: bold;
-    color: white;
-}
-
-.music-author {
-    font-size: 12px;
-    color: #bbb;
-}
-
-.music-progress {
-    background-color: #444;
-    height: 4px;
-    border-radius: 2px;
-    width: 100%;
-}
-
-.music-controls {
-    spacing: 10px;
-    margin-top: 5px;
-    justify-content: center;
-}
-
 .menu-bottom-row {
     spacing: 10px;
     justify-content: center;
@@ -470,7 +427,6 @@
     background-color: #5a5a5a;
 }
 
-/*Menu*/
 .net-boxmn {
     background-color: rgba(50, 50, 50, 0.95);
     border-radius: 16px;
@@ -504,13 +460,11 @@
 }
 
 .control-box {
-    width: 100%;
     spacing: 6px;
     margin-top: 5px;
 }
 
 .toggle-btn {
-    width: 100%;
     padding: 6px 10px;
     background-color: rgba(80, 80, 80, 0.3);
     border-radius: 8px;
@@ -571,7 +525,7 @@
 .menu-battery-label {
     font-size: 12px;
     font-weight: bold;
-    color: white; /* ou couleur adaptée au thème */
+    color: white;
 }
 
 .bottom-btn {
@@ -729,15 +683,13 @@
 }
 
 .search-filter-box {
-    /* Conteneur des boutons de filtre */
     padding: 5px 0;
     margin-bottom: 5px;
     align-items: center;
-    justify-content: flex-start; /* Aligner les boutons à gauche */
+    justify-content: flex-start;
 }
 
 .search-filter-btn {
-    /* Style par défaut des boutons de filtre */
     background-color: rgba(255, 255, 255, 0.1);
     color: #cccccc;
     font-size: 13px;
@@ -753,38 +705,34 @@
 }
 
 .search-filter-btn.selected {
-    /* Style du bouton de filtre sélectionné */
-    background-color: #007bff; /* Couleur d'accentuation (Bleu) */
+    background-color: #007bff;
     color: #ffffff;
     font-weight: bold;
     border-color: #ffffff;
 }
 
 .clipboard-menu {
-    background-color: rgba(20, 20, 20, 0.95); /* Fond sombre type Prism */
-    border: 1px solid rgba(255, 255, 255, 0.1); /* Bordure fine */
-    border-radius: 16px; /* Coins arrondis */
+    background-color: rgba(20, 20, 20, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
     padding: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); /* Ombre portée */
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
     color: #ffffff;
 }
 
-/* L'en-tête (Titre + Bouton) */
 .clipboard-header {
     padding-bottom: 10px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1); /* Ligne de séparation */
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     margin-bottom: 8px;
 }
 
-/* Le titre "Presse-papier" */
 .clipboard-title {
     font-weight: 800;
     font-size: 15px;
-    padding-top: 4px; /* Pour aligner verticalement avec le bouton */
+    padding-top: 4px;
     color: #eeeeee;
 }
 
-/* Le bouton "Tout effacer" */
 .clipboard-clear-btn {
     background-color: rgba(255, 255, 255, 0.05);
     border-radius: 8px;
@@ -796,7 +744,7 @@
 }
 
 .clipboard-clear-btn:hover {
-    background-color: rgba(255, 59, 48, 0.2); /* Rouge au survol */
+    background-color: rgba(255, 59, 48, 0.2);
     color: #ff3b30;
     box-shadow: inset 0 0 0 1px rgba(255, 59, 48, 0.5);
 }
@@ -805,33 +753,30 @@
     background-color: rgba(255, 59, 48, 0.4);
 }
 
-/* Zone de scroll */
 .clipboard-scroll {
     padding-right: 2px;
 }
 
-/* La liste des éléments */
 .clipboard-list {
-    spacing: 4px; /* Espace entre les boutons */
+    spacing: 4px;
 }
 
-/* Chaque élément de l'historique (Bouton) */
 .clipboard-item {
     padding: 8px 12px;
     border-radius: 10px;
     background-color: transparent;
-    border: 1px solid transparent; /* Pour éviter le saut au survol */
+    border: 1px solid transparent;
     transition-duration: 150ms;
-    text-align: left; /* Texte aligné à gauche */
+    text-align: left;
 }
 
 .clipboard-item:hover {
-    background-color: rgba(255, 255, 255, 0.1); /* Gris clair au survol */
+    background-color: rgba(255, 255, 255, 0.1);
     border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .clipboard-item:active {
-    background-color: rgba(255, 255, 255, 0.2); /* Plus clair au clic */
+    background-color: rgba(255, 255, 255, 0.2);
 }
 
 .clipboard-item StLabel {
@@ -843,7 +788,6 @@
     color: #ffffff;
 }
 
-/* Message "Aucun élément copié" */
 .clipboard-empty {
     font-size: 13px;
     color: #666666;
@@ -853,7 +797,7 @@
 }
 
 .dock-context-menu {
-    background-color: rgba(30, 30, 30, 0.95); /* Fond sombre */
+    background-color: rgba(30, 30, 30, 0.95);
     border-radius: 12px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 4px 10px rgba(0,0,0,0.5);
@@ -868,11 +812,10 @@
 }
 
 .popup-menu-item:hover {
-    background-color: rgba(255, 255, 255, 0.15); /* Survol */
+    background-color: rgba(255, 255, 255, 0.15);
 }
 
 .prism-about-dialog {
-    /* Fond de la modale */
     background-color: rgba(30, 30, 30, 0.95);
     border-radius: 20px;
     min-width: 150px;
@@ -933,7 +876,6 @@
     background-color: rgba(0, 0, 0, 0.6);
 }
 
-/* --- LE MODAL DIALOG LAUNCHER --- */
 .prism-launcher-dialog {
     background-color: rgba(30, 30, 30, 0.95);
     border-radius: 16px;
@@ -948,7 +890,6 @@
     spacing: 15px;
 }
 
-/* Barre de recherche */
 .prism-launcher-search-box {
     background-color: rgba(255, 255, 255, 0.05);
     border-radius: 12px;
@@ -972,12 +913,10 @@
     box-shadow: none;
 }
 
-/* Zone de contenu ScrollView */
 .prism-launcher-scroll {
     padding-right: 10px;
 }
 
-/* --- LA GRILLE --- */
 .prism-launcher-row {
     spacing: 15px;
     margin-bottom: 15px;
@@ -988,7 +927,6 @@
     background-color: transparent;
     border-radius: 12px;
     padding: 15px 5px;
-    /* Largeur retirée pour laisser JS s'étendre proportionnellement */
     transition-duration: 150ms;
 }
 
@@ -1002,12 +940,11 @@
 
 .prism-card-label {
     color: #ffffff;
-    font-size: 14px; /* Augmenté de 12px à 14px */
+    font-size: 14px;
     text-align: center;
-    font-weight: bold; /* Mis en gras pour la lisibilité */
+    font-weight: bold;
 }
 
-/* --- LES RÉSULTATS DE RECHERCHE --- */
 .prism-launcher-list-item {
     background-color: transparent;
     border-radius: 8px;
@@ -1042,7 +979,6 @@
     padding-top: 40px;
 }
 
-/* --- FILTRES DE RECHERCHE --- */
 .prism-launcher-filters {
     spacing: 10px;
     margin-bottom: 15px;
@@ -1053,7 +989,7 @@
     background-color: rgba(255, 255, 255, 0.05);
     color: #aaaaaa;
     padding: 6px 14px;
-    border-radius: 15px; /* Forme de pilule */
+    border-radius: 15px;
     font-size: 13px;
     border: 1px solid transparent;
     transition-duration: 150ms;
@@ -1065,13 +1001,12 @@
 }
 
 .prism-filter-btn.selected {
-    background-color: #007bff; /* Bleu de sélection */
+    background-color: #007bff;
     color: #ffffff;
     font-weight: bold;
     border-color: #ffffff;
 }
 
-/* --- BARRE DE NAVIGATION (Pagination) --- */
 .prism-launcher-navbar {
     spacing: 20px;
     margin-top: 10px;
@@ -1102,4 +1037,96 @@
 .prism-nav-btn.close-btn:hover {
     background-color: rgba(255, 85, 85, 0.4);
     color: #ffffff;
+}
+
+.notification-history-header {
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    margin-bottom: 10px;
+}
+
+.notification-action-btn {
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    padding: 6px;
+    margin-left: 8px;
+    transition-duration: 150ms;
+}
+
+.notification-action-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+.notification-action-btn:active {
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+.notification-action-btn.dnd-active {
+    background-color: rgba(255, 85, 85, 0.2);
+    color: #ff5555;
+    box-shadow: inset 0 0 0 1px rgba(255, 85, 85, 0.5);
+}
+
+.notification-time-label {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 11px;
+    margin-left: 10px;
+}
+
+.notification-item-action-box {
+    margin-top: 10px;
+    spacing: 8px;
+}
+
+.notification-item-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+    border-radius: 6px;
+    padding: 6px 0;
+    text-align: center;
+    transition-duration: 150ms;
+}
+
+.notification-item-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.notification-item-btn:active {
+    background-color: rgba(255, 255, 255, 0.3);
+}
+
+.notification-history-container {
+    background-color: rgba(30, 30, 30, 0.85);
+    border-radius: 15px;
+    padding: 15px;
+    box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3);
+}
+
+.notification-hover-overlay {
+    background-color: rgba(0, 0, 0, 0.7);
+    border-radius: 10px;
+}
+
+.notification-hover-icon {
+    color: #ff5555;
+}
+
+.app-running-dot {
+    width: 4px;
+    height: 4px;
+    background-color: white;
+    border-radius: 2px;
+    margin-bottom: 2px;
+    box-shadow: 0 0 2px rgba(0,0,0,0.8);
+}
+
+.prism-home-bar {
+    background-color: rgba(216, 216, 216, 0.4);
+    border-radius: 10px;
+    transition: background-color 0.2s, width 0.2s;
+}
+
+.prism-home-bar:hover {
+    background-color: rgba(131, 131, 131, 0.8);
+    width: 220px; 
 }

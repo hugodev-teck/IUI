@@ -1,9 +1,9 @@
-/* */
-/* Copyright (c) Project PRISM. All rights reserved.        */
-/* This software is licensed under the CC BY-NC           */
-/* Full text of the license can be found at              */
-/* https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
-/* */
+/*                                                                */
+/*       Copyright (c) Project PRISM. All rights reserved.        */
+/*         This software is licensed under the CC BY-NC           */
+/*          Full text of the license can be found at              */
+/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                                                                */
 
 const { St, GObject, Gio, Clutter, GLib } = imports.gi;
 const Main = imports.ui.main;
@@ -19,7 +19,6 @@ const SEARCH_TYPE = {
     WEB: 'web'
 };
 
-// --- ALGORITHME DE LEVENSHTEIN ---
 function getLevenshteinDistance(a, b) {
     if (!a || !b) return 0;
     if (a.length === 0) return b.length;
@@ -212,13 +211,13 @@ var AppLauncher = GObject.registerClass(
             this.bgClicker.connect('clicked', () => this.hide());
             this._overlayBox.add_child(this.bgClicker);
 
-            // TAILLES MISES À JOUR (760 de hauteur pour respirer)
             let panelWidth = 900;
             let panelHeight = 760;
             let posX = monitor.x + Math.floor((monitor.width - panelWidth) / 2);
             let posY = monitor.y + Math.floor((monitor.height - panelHeight) / 2);
 
             this.mainPanel = new St.BoxLayout({
+                name: 'src-mn-panel',
                 style_class: 'prism-launcher-dialog', 
                 vertical: true,
                 reactive: true,
@@ -229,14 +228,14 @@ var AppLauncher = GObject.registerClass(
             });
 
             let contentLayout = new St.BoxLayout({
+                name: 'srv-mn-launcher',
                 vertical: true,
                 style_class: 'prism-launcher-content',
                 x_expand: true,
                 y_expand: true
             });
 
-            // --- BARRE DE RECHERCHE ---
-            let searchBox = new St.BoxLayout({ style_class: 'prism-launcher-search-box', vertical: false });
+            let searchBox = new St.BoxLayout({name: 'search-box', style_class: 'prism-launcher-search-box', vertical: false });
             let searchIcon = new St.Icon({ gicon: Gio.icon_new_for_string('system-search-symbolic'), icon_size: 24, style_class: 'prism-launcher-icon' });
             
             this.searchEntry = new St.Entry({ 
@@ -250,8 +249,7 @@ var AppLauncher = GObject.registerClass(
             searchBox.add_child(this.searchEntry);
             contentLayout.add_child(searchBox);
 
-            // --- BARRE DES FILTRES ---
-            this.filterBox = new St.BoxLayout({ style_class: 'prism-launcher-filters', vertical: false });
+            this.filterBox = new St.BoxLayout({name: 'src-filter', style_class: 'prism-launcher-filters', vertical: false });
             
             const createBtn = (label, type) => {
                 let btn = new St.Button({ 
@@ -280,13 +278,11 @@ var AppLauncher = GObject.registerClass(
             contentLayout.add_child(this.filterBox);
             this.filterBox.hide(); 
 
-            // --- CONTENEUR CENTRAL : ESPACE AGRANDI À 580px ---
-            this.innerBox = new St.BoxLayout({ vertical: true }); 
+            this.innerBox = new St.BoxLayout({name: 'central-contener', vertical: true }); 
             this.innerBox.set_height(580); 
             contentLayout.add_child(this.innerBox);
 
-            // --- BARRE DE NAVIGATION ---
-            this.navBar = new St.BoxLayout({ style_class: 'prism-launcher-navbar', vertical: false, x_align: Clutter.ActorAlign.CENTER });
+            this.navBar = new St.BoxLayout({name: 'prism-launcher-navbar', style_class: 'prism-launcher-navbar', vertical: false, x_align: Clutter.ActorAlign.CENTER });
             
             this.btnPrev = new St.Button({ label: '◀ Précédent', style_class: 'prism-nav-btn', reactive: true });
             this.btnPrev.connect('clicked', () => {
@@ -385,10 +381,11 @@ var AppLauncher = GObject.registerClass(
             pageApps.forEach((app, index) => {
                 if (index % maxCols === 0) {
                     currentRow = new St.BoxLayout({ 
+                        name: 'src-c-row',
                         vertical: false, 
                         style_class: 'prism-launcher-row',
-                        height: 135, // Ligne légèrement plus haute
-                        x_align: Clutter.ActorAlign.CENTER // LE FIX : Force la ligne et son contenu au centre de la fenêtre !
+                        height: 135,
+                        x_align: Clutter.ActorAlign.CENTER 
                     });
                     this.innerBox.add_child(currentRow);
                 }
@@ -401,7 +398,7 @@ var AppLauncher = GObject.registerClass(
                 appBtn.set_width(130);
                 appBtn.set_height(125);
 
-                let cardBox = new St.BoxLayout({ vertical: true });
+                let cardBox = new St.BoxLayout({name: 'src-c-box-2', vertical: true });
                 
                 let icon = new St.Icon({ 
                     gicon: app.get_icon() || Gio.icon_new_for_string('application-x-executable'), 
@@ -454,15 +451,15 @@ var AppLauncher = GObject.registerClass(
                     let btn = new St.Button({ 
                         style_class: 'prism-launcher-list-item', 
                         reactive: true,
-                        x_align: Clutter.ActorAlign.CENTER // Centre les barres de résultats
+                        x_align: Clutter.ActorAlign.CENTER
                     });
                     btn.set_width(840);
 
-                    let box = new St.BoxLayout({ vertical: false });
+                    let box = new St.BoxLayout({name: 'src-c-box-3', vertical: false });
                     
                     let icon = new St.Icon({ gicon: r.icon, icon_size: 32, style_class: 'prism-list-icon' });
                     
-                    let texts = new St.BoxLayout({ vertical: true });
+                    let texts = new St.BoxLayout({name: 'src-c-box-4', vertical: true });
                     
                     let name = r.name || "Inconnu";
                     let safeName = name.length > 60 ? name.substring(0, 57) + '...' : name;

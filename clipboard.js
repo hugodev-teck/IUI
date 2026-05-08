@@ -1,3 +1,10 @@
+/*                                                                */
+/*       Copyright (c) Project PRISM. All rights reserved.        */
+/*         This software is licensed under the CC BY-NC           */
+/*          Full text of the license can be found at              */
+/*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                                                                */
+
 const { St, GLib, Gio, Clutter, Shell } = imports.gi;
 const Main = imports.ui.main;
 const ExtensionUtils = imports.misc.extensionUtils;
@@ -59,11 +66,12 @@ var ClipboardManager = class ClipboardManager {
 
         this.menuBox = new St.BoxLayout({
             style_class: 'clipboard-menu',
+            name: 'clip-menu',
             vertical: true,
             reactive: true
         });
 
-        let header = new St.BoxLayout({ style_class: 'clipboard-header' });
+        let header = new St.BoxLayout({name: 'clip-head', style_class: 'clipboard-header' });
         let title = new St.Label({ text: "Presse-papier", style_class: 'clipboard-title', x_expand: true });
         let clearBtn = new St.Button({ style_class: 'clipboard-clear-btn', label: 'Effacer' });
         
@@ -84,7 +92,7 @@ var ClipboardManager = class ClipboardManager {
             y_expand: true
         });
         
-        this.historyList = new St.BoxLayout({ vertical: true, style_class: 'clipboard-list' });
+        this.historyList = new St.BoxLayout({name: 'hystory-list', vertical: true, style_class: 'clipboard-list' });
         this.scroll.add_actor(this.historyList);
         this.menuBox.add_child(this.scroll);
 

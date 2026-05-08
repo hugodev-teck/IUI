@@ -10,13 +10,8 @@
 /*         This software is licensed under the CC BY-NC           */
 /*          Full text of the license can be found at              */
 /*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
+/*                          V1.3.0-pre-re                         */
 /*                                                                */
-
-//----- TEMP --------
-// Nouveau : Gestionnaire de presse papier
-// Amélioration du gestionnaire de mise a jour
-// Fix : Plus besoin de saisir le mot de passe pour la déconnetion
-
 
 const NM = imports.gi.NM;
 const UPowerGlib = imports.gi.UPowerGlib;
@@ -50,8 +45,10 @@ const DUMMY_KEY = 'super-block';
 
 let searchBar;
 let pollingId;
+let homeBar;
 let previousWindow = null;
-let notificationManager = new NotificationManager();
+let notificationManager = null;
+let originalWallpaperUri = null;
 let myDock;
 let menu = null;
 let networkSetting;
@@ -72,8 +69,11 @@ class MyDock {
         
     }
     _constructbar(){
-        this.container = new St.BoxLayout({ style_class: 'my-dock-container' });
-        this._editMode = false; // Initialisation de l'état
+        this.container = new St.BoxLayout({ 
+            name: 'ConstrucBar',
+            style_class: 'my-dock-container' 
+        });
+        this._editMode = false;
         this.addButton = null;
 
         this.addCustomIconMenu(`${ExtensionUtils.getCurrentExtension().path}/icons/logo.png`, "Menu principal");
@@ -86,23 +86,27 @@ class MyDock {
 
         Main.layoutManager._backgroundGroup.add_child(this.container);
 
-        Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
-          this.container.connect('notify::allocation', () => {
-            this._setPosition();
-        });
+        this.container.connect('notify::width', () => { this._setPosition(); });
+        this.container.connect('notify::height', () => { this._setPosition(); });
 
         this.tooltip = new St.Label({
             style_class: 'dock-tooltip',
             text: '',
             opacity: 0,
             visible: false,
+            reactive: false
         });
-        Main.layoutManager._backgroundGroup.add_child(this.tooltip);
 
-        
+        Main.layoutManager.addChrome(this.tooltip);
 
-        // Initialement positionner le conteneur
-        this._setPosition();
+        Mainloop.idle_add(() => {
+            if (this.container) this._setPosition();
+            return GLib.SOURCE_REMOVE;
+        });
+
+        this._dockMonitorId = Main.layoutManager.connect('monitors-changed', () => {
+            this._setPosition();
+        });
     }
 
     addCustomIconMenu(iconPath, labelText = '') {
@@ -125,7 +129,6 @@ class MyDock {
                 if (pressDuration >= longPressDuration) {
                     this._shutdownPC();
                 } else {
-                    // --- NOUVEAU : On ouvre/ferme le Launcher ---
                     if (global.appLauncher) {
                         global.appLauncher.toggle();
                     }
@@ -135,7 +138,6 @@ class MyDock {
                 }
             }
 
-            // Clic Droit : Menu Déroulant
             if (event.get_button() === 3) { 
                 this._toggleContextMenu(icon);
             }
@@ -224,12 +226,10 @@ class MyDock {
         let tooltipHeight = this.tooltip.height;
 
         let posX = x + (iconWidth / 2) - (tooltipWidth / 2);
-        // juste au-dessus du bouton
         let posY = y - tooltipHeight - 20;
 
         this.tooltip.set_position(posX, posY);
 
-        // petite animation d’apparition
         this.tooltip.opacity = 0;
         this.tooltip.ease({
             opacity: 255,
@@ -253,7 +253,6 @@ class MyDock {
     }
 
     _updateAddIcon() {
-        // Si le bouton n'est pas sur le dock, on met juste à jour le style des icônes existantes
         let children = this.container.get_children();
         for (let child of children) {
             if (this._editMode)
@@ -262,7 +261,6 @@ class MyDock {
                 child.remove_style_class_name('edit-mode-app');
         }
 
-        // Si jamais vous décidez d'afficher le bouton plus tard
         if (this.addButton) {
             const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
             this.addButton.set_child(new St.Icon({ icon_name: iconName, icon_size: 40 }));
@@ -277,6 +275,7 @@ class MyDock {
         }
 
         this.popupMenu = new St.BoxLayout({
+            name: 'PopUP-menu',
             vertical: true,
             style_class: 'app-chooser-menu',
             reactive: true,
@@ -284,12 +283,10 @@ class MyDock {
         });
         Main.uiGroup.add_child(this.popupMenu);
 
-        // POSITIONNEMENT INTELLIGENT
         let monitor = Main.layoutManager.primaryMonitor;
         let menuWidth = 240;
         let menuHeight = 400;
 
-        // On le centre sur l'écran si addButton n'existe pas
         let posX = Math.floor(monitor.x + (monitor.width - menuWidth) / 2);
         let posY = Math.floor(monitor.y + (monitor.height - menuHeight) / 2);
 
@@ -316,7 +313,10 @@ class MyDock {
             hscrollbar_policy: St.PolicyType.NEVER,
             vscrollbar_policy: St.PolicyType.AUTOMATIC
         });
-        let list = new St.BoxLayout({ vertical: true });
+        let list = new St.BoxLayout({ 
+            name: 'app-list',
+            vertical: true 
+        });
         scroll.add_actor(list);
         this.popupMenu.add_child(scroll);
 
@@ -326,7 +326,10 @@ class MyDock {
 
         for (let app of allApps.slice(0, 150)) {
             let item = new St.Button({ style_class: 'app-chooser-item' });
-            let row = new St.BoxLayout({ vertical: false });
+            let row = new St.BoxLayout({ 
+                name: 'app-row',
+                vertical: false 
+            });
 
             let icon = new St.Icon({
                 gicon: app.get_icon(),
@@ -486,23 +489,26 @@ class MyDock {
 
         if (windows.length === 0) return;
 
-        // --- Créer le popup ---
         let popup = new St.BoxLayout({
+            name: 'pop-up-lyt',
             vertical: true,
             style_class: 'window-list-popup',
             reactive: true,
             can_focus: true,
-            track_hover: true,
+            track_hover: true
         });
 
-        // --- Ajouter les fenêtres ---
         for (let w of windows) {
-            let row = new St.BoxLayout({ vertical: false, style_class: 'window-list-item' });
+            let row = new St.BoxLayout({ 
+                vertical: false, 
+                name: 'windows-row',
+                style_class: 'window-list-item' 
+            });
 
             let label = new St.Label({
                 text: w.get_title() || 'Sans titre',
                 y_align: Clutter.ActorAlign.CENTER,
-                x_expand: true,
+                x_expand: true
             });
 
             row.connect('button-press-event', () => {
@@ -510,7 +516,6 @@ class MyDock {
                 this._hideWindowList();
             });
 
-            // Bouton fermer
             let closeBtn = new St.Button({
                 style_class: 'window-close-btn',
                 reactive: true,
@@ -532,7 +537,6 @@ class MyDock {
 
                 try { row.destroy(); } catch (e) {}
 
-                // Si plus de lignes → fermer popup après un petit délai
                 Mainloop.timeout_add(200, () => {
                     if (popup.get_n_children() === 0)
                         this._hideWindowList();
@@ -548,7 +552,6 @@ class MyDock {
         Main.uiGroup.add_child(popup);
         this.windowListPopup = popup;
 
-        // --- Position du popup ---
         Mainloop.idle_add(() => {
             try {
                 let [bx, by] = iconActor.get_transformed_position();
@@ -576,7 +579,6 @@ class MyDock {
             return false;
         });
 
-        // --- Garde le menu visible tant que la souris est dedans ---
         const state = this._popupState[appId];
         const hideIfOutside = () => {
             if (!state.insidePopup && !state.insideIcon)
@@ -618,7 +620,7 @@ class MyDock {
 
     _shutdownPC() {
         // Commande pour éteindre le PC
-        GLib.spawn_command_line_async('systemctl poweroff');
+        GLib.spawn_command_line_async('gnome-session-quit --power-off');
     }
 
     addCustomIcon(iconPath, labelText = '') {
@@ -666,20 +668,35 @@ class MyDock {
 
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
-
+        if (!monitor || !this.container || this.container.width <= 0) return;
+        
         let bottomOffset = 10;
+        let targetX = Math.round((monitor.width / 2) - (this.container.width / 2));
+        let targetY = Math.round(monitor.height - this.container.height - bottomOffset);
 
-        // Calculer la position horizontale centrale
-        let centerX = Math.floor((monitor.width / 2) - (this.container.width / 2));
-        let posY = monitor.height - this.container.height - bottomOffset;
+        let currentX = Math.round(this.container.x);
+        let currentY = Math.round(this.container.y);
 
-        // Ajuster la position du conteneur
-        this.container.set_position(centerX, posY);
+        if (currentX !== targetX || currentY !== targetY) {
+            this.container.set_position(targetX, targetY);
+        }
     }
 
     destroy() {
+    if (this._dockMonitorId) {
+        Main.layoutManager.disconnect(this._dockMonitorId);
+        this._dockMonitorId = 0;
+    }
+    
+    if (this.tooltip) {
+        Main.layoutManager.removeChrome(this.tooltip);
+        this.tooltip.destroy();
+    }
+    
+    if (this.container) {
         this.container.destroy();
     }
+}
 }
 
 class NetworkSetting {
@@ -688,6 +705,7 @@ class NetworkSetting {
 
         this.container = new St.BoxLayout({
             style_class: 'network-settings-container',
+            name: 'network-settings-container',
             vertical: false
         });
 
@@ -707,10 +725,14 @@ class NetworkSetting {
         this.container.add_child(this.batteryButton);
 
         Main.layoutManager._backgroundGroup.add_child(this.container);
-        Main.layoutManager._backgroundGroup.set_child_below_sibling(this.container, null);
         
-        this.container.connect('notify::allocation', () => { this._setPosition(); });
-        this._setPosition();
+        this.container.connect('notify::width', () => { this._setPosition(); });
+        this.container.connect('notify::height', () => { this._setPosition(); });
+
+        Mainloop.idle_add(() => {
+            if (this.container) this._setPosition();
+            return GLib.SOURCE_REMOVE;
+        });
 
         global.barReseau = this;
         this.wifiMenu = null;
@@ -722,19 +744,28 @@ class NetworkSetting {
             this._initNetwork();
             return GLib.SOURCE_REMOVE;
         });
+
+        this._networkMonitorId = Main.layoutManager.connect('monitors-changed', () => {
+            this._setPosition();
+        });
     }
 
     _updateIcon(iconActor, iconName) {
-        if (iconActor && iconName) {
-            let path = `${this._iconsPath}/${iconName}`;
-            let file = Gio.File.new_for_path(path);
-            
-            if (file.query_exists(null)) {
-                let gicon = new Gio.FileIcon({ file: file });
-                iconActor.gicon = gicon;
-            } else {
-                log(`[PrismUI Erreur] Fichier icône introuvable : ${path}`);
+        if (!this.container || !iconActor) return;
+
+        try {
+            if (iconName) {
+                let path = `${this._iconsPath}/${iconName}`;
+                let file = Gio.File.new_for_path(path);
+                
+                if (file.query_exists(null)) {
+                    let gicon = new Gio.FileIcon({ file: file });
+                    iconActor.gicon = gicon;
+                } else {
+                    log(`[PrismUI Erreur] Fichier icône introuvable : ${path}`);
+                }
             }
+        } catch (e) {
         }
     }
 
@@ -854,7 +885,7 @@ class NetworkSetting {
 
     _updateBatteryIcon(device) {
         let percentage = device ? device.percentage : 100;
-        let state = device ? device.state : UPowerGlib.DeviceState.UNKNOWN; // 1=Charging
+        let state = device ? device.state : UPowerGlib.DeviceState.UNKNOWN;
 
         let baseName = 'battery-fullwth';
         if (percentage < 10) baseName = 'battery-emptywth';
@@ -915,7 +946,7 @@ class NetworkSetting {
         let monitorIndex = window.get_monitor();
         let monitor = Main.layoutManager.monitors[monitorIndex];
         let dockHeight = (global.myDock && global.myDock.container) ? global.myDock.container.height + 25 : 100;
-        let topBarHeight = Main.panel.actor.visible ? Main.panel.actor.height : 0;
+        let topBarHeight = Main.panel.visible ? Main.panel.height : 0;
         let newX = monitor.x;
         let newY = monitor.y + topBarHeight;
         let newWidth = monitor.width;
@@ -931,10 +962,18 @@ class NetworkSetting {
     }
 
     _setPosition() {
-        let primaryMonitor = Main.layoutManager.primaryMonitor;
-        let posX = primaryMonitor.x + primaryMonitor.width - this.container.width - 20;
-        let posY = primaryMonitor.y + 23;
-        this.container.set_position(posX, posY);
+        let monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor || !this.container || this.container.width <= 0) return;
+
+        let targetX = Math.round(monitor.x + monitor.width - this.container.width - 20);
+        let targetY = Math.round(monitor.y + 23);
+        
+        let currentX = Math.round(this.container.x);
+        let currentY = Math.round(this.container.y);
+
+        if (currentX !== targetX || currentY !== targetY) {
+            this.container.set_position(targetX, targetY);
+        }
     }
 
     async _wifimenu() {
@@ -947,12 +986,14 @@ class NetworkSetting {
     
         let menuwf = new St.BoxLayout({
             vertical: true,
+            name: 'net-box',
             style_class: 'net-box'
         });
     
         let header = new St.BoxLayout({
             vertical: false,
-            style_class: 'header-wifi'
+            style_class: 'header-wifi',
+            name: 'header-wifi'
         });
     
         let title = new St.Label({
@@ -973,7 +1014,8 @@ class NetworkSetting {
     
         let networkList = new St.BoxLayout({
             vertical: true,
-            style_class: 'network-list'
+            style_class: 'network-list',
+            name: 'network-list'
         });
     
         menuwf.add_child(networkList);
@@ -982,6 +1024,7 @@ class NetworkSetting {
         networks.forEach(network => {
             let networkItem = new St.BoxLayout({
                 vertical: false,
+                name: 'network-item',
                 style_class: 'network-item'
             });
     
@@ -1028,7 +1071,6 @@ class NetworkSetting {
         let menubleY = Main.layoutManager.primaryMonitor.y + topOffset;
         
     
-        // Vérifier l'état du service Bluetooth
         let serviceActive = await this.isBluetoothServiceActive();
         
         if (!serviceActive) {
@@ -1037,14 +1079,15 @@ class NetworkSetting {
             return null;
         }
     
-        // Création du menu Bluetooth
         let menuble = new St.BoxLayout({
             vertical: true,
+            name: 'net-box',
             style_class: 'net-box'
         });
     
         let header = new St.BoxLayout({
             vertical: false,
+            name: 'header-ble',
             style_class: 'header-bluetooth'
         });
     
@@ -1077,6 +1120,7 @@ class NetworkSetting {
     
         let deviceList = new St.BoxLayout({
             vertical: true,
+            name: 'device-list',
             style_class: 'device-list'
         });
     
@@ -1086,6 +1130,7 @@ class NetworkSetting {
         devices.forEach(device => {
             let deviceItem = new St.BoxLayout({
                 vertical: false,
+                name: 'device-item-2',
                 style_class: 'device-item'
             });
     
@@ -1266,11 +1311,13 @@ async _accessibilityMenu() {
     
         let menu = new St.BoxLayout({
             vertical: true,
+            name: 'net-box-menu',
             style_class: 'net-box'
         });
     
         let header = new St.BoxLayout({
             vertical: false,
+            name: 'header-acess',
             style_class: 'header-accessibility'
         });
     
@@ -1284,6 +1331,7 @@ async _accessibilityMenu() {
     
         let optionsList = new St.BoxLayout({
             vertical: true,
+            name: 'option-list',
             style_class: 'options-list'
         });
     
@@ -1299,6 +1347,7 @@ async _accessibilityMenu() {
         settings.forEach(setting => {
             let item = new St.BoxLayout({
                 vertical: false,
+                name: 'option-item-box',
                 style_class: 'option-item'
             });
     
@@ -1328,7 +1377,6 @@ async _accessibilityMenu() {
                 let newState = !currentState;
                 this._setSetting(setting.schema, setting.key, newState);
     
-                // Mettre à jour l'icône en fonction de l'état
                 icon.gicon = Gio.icon_new_for_string(newState ? iconPathOn : iconPathOff);
             });
     
@@ -1359,23 +1407,22 @@ _handleBarClick() {
 
     let menunet = new St.BoxLayout({
         vertical: true,
+        name: 'net-boxmn',
         style_class: 'net-boxmn'
     });
 
     menunet.set_position(menunetX, menunetY);
     menunet.set_size(menunetWidth, menunetHeight);
 
-    // === HEURE + DATE ===
     let now = new Date();
     let dateLabel = new St.Label({ text: now.toLocaleDateString(), style_class: 'date-labelmn' });
     let timeLabel = new St.Label({ text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), style_class: 'time-labelmn' });
-    let dateBox = new St.BoxLayout({ vertical: true, style_class: 'datetime-box' });
+    let dateBox = new St.BoxLayout({ vertical: true, name: 'datetime-box', style_class: 'datetime-box' });
     dateBox.add_child(timeLabel);
     dateBox.add_child(dateLabel);
 
-    // === LIGNES WIFI / BLE / ACCESSIBILITÉ ===
     function createToggleRow(iconName, title) {
-        let row = new St.BoxLayout({ vertical: false, style_class: 'toggle-row' });
+        let row = new St.BoxLayout({ vertical: false, name: 'tgl-row', style_class: 'toggle-row' });
         let icon = new St.Icon({ icon_name: iconName, icon_size: 18, style_class: 'toggle-icon' });
         let label = new St.Label({ text: title, style_class: 'toggle-label' });
 
@@ -1393,6 +1440,7 @@ _handleBarClick() {
 
     let controlBox = new St.BoxLayout({
         vertical: true,
+        name: 'control-box',
         style_class: 'control-box'
     });
 
@@ -1454,10 +1502,9 @@ _handleBarClick() {
     controlBox.add_child(bleBtn);
     controlBox.add_child(accBtn);
 
-    // === SLIDERS ===
     let volumeLabel = new St.Label({ text: "Volume", style_class: 'label' });
     let volumeSlider = new Slider.Slider(0.5);
-    let volumeBox = new St.BoxLayout({ vertical: false, style_class: 'slider-box-vol' });
+    let volumeBox = new St.BoxLayout({name: 'vlm-box', vertical: false, style_class: 'slider-box-vol' });
     volumeBox.add_child(volumeLabel);
     volumeBox.add_child(volumeSlider);
 
@@ -1477,7 +1524,7 @@ _handleBarClick() {
 
         let brightLabel = new St.Label({ text: "Luminosité", style_class: 'label' });
         let brightSlider = new Slider.Slider(0);
-        let brightBox = new St.BoxLayout({ vertical: false, style_class: 'slider-box-brig' });
+        let brightBox = new St.BoxLayout({name: 'brightbox', vertical: false, style_class: 'slider-box-brig' });
         brightBox.add_child(brightLabel);
         brightBox.add_child(brightSlider);
 
@@ -1517,10 +1564,9 @@ _handleBarClick() {
             log("Erreur Luminosité DBus: " + e.message);
         }
 
-    let bottomBox = new St.BoxLayout({ style_class: 'bottom-box', vertical: false }); // Assurez-vous que c'est horizontal
+    let bottomBox = new St.BoxLayout({name: 'bottomBox', style_class: 'bottom-box', vertical: false }); // Assurez-vous que c'est horizontal
 
-        // Conteneur pour les boutons d'alim (à gauche)
-        let powerButtonsBox = new St.BoxLayout({ style_class: 'power-buttons-box' });
+        let powerButtonsBox = new St.BoxLayout({name: 'powerbtn', style_class: 'power-buttons-box' });
         
         let logoutBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-log-out-symbolic' }) });
         let rebootBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-reboot-symbolic' }) });
@@ -1539,7 +1585,7 @@ _handleBarClick() {
         let spacer = new St.Widget({ x_expand: true });
         bottomBox.add_child(spacer);
 
-        let batteryBox = new St.BoxLayout({ style_class: 'menu-battery-box', vertical: false });
+        let batteryBox = new St.BoxLayout({name: 'mn-bat-box', style_class: 'menu-battery-box', vertical: false });
         let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
         let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
 
@@ -1566,7 +1612,6 @@ _handleBarClick() {
 
             let iconName = `${baseName}${suffix}.png`;
             
-            // Charger l'icône
             let path = `${this._iconsPath}/${iconName}`;
             let file = Gio.File.new_for_path(path);
             if (file.query_exists(null)) {
@@ -1597,6 +1642,25 @@ _handleBarClick() {
     global.stage.connect('button-press-event', () => menunet.destroy());
     return menunet;
 }
+
+    destroy() {
+        if (this._powerTimeout) {
+            GLib.Source.remove(this._powerTimeout);
+            this._powerTimeout = 0;
+        }
+
+        if (this._networkMonitorId) {
+            Main.layoutManager.disconnect(this._networkMonitorId);
+            this._networkMonitorId = 0;
+        }
+
+        this._closeAllMenus();
+
+        if (this.container) {
+            this.container.destroy();
+            this.container = null;
+        }
+    }
 }
 
 var AboutDialog = GObject.registerClass(
@@ -1719,7 +1783,7 @@ const UpdateManager = class {
                 destroyOnClose: true
             });
 
-            let content = new St.BoxLayout({ vertical: true });
+            let content = new St.BoxLayout({name: 'dwn-updt', vertical: true });
             
             let title = new St.Label({ 
                 text: "Fichiers système manquants", 
@@ -1844,10 +1908,10 @@ const UpdateManager = class {
     }
 };
 
-/* --- CLASSE UTILITAIRE GÉNÉRIQUE POUR MENU CONTEXTUEL DEROULANT --- */
 class CustomPopup {
     constructor(x, y) {
         this.actor = new St.BoxLayout({
+            name: 'dock-context-menu',
             style_class: 'dock-context-menu',
             vertical: true,
             reactive: true
@@ -1868,10 +1932,10 @@ class CustomPopup {
             x_align: St.Align.START,
             y_align: St.Align.MIDDLE,
             can_focus: true,
-            track_hover: true // Ajout pour le survol natif
+            track_hover: true
         });
 
-        let box = new St.BoxLayout({ vertical: false, style: 'padding: 8px;' });
+        let box = new St.BoxLayout({name: 'box-item', vertical: false, style: 'padding: 8px;' });
         
         if (iconName) {
             let icon = new St.Icon({ icon_name: iconName, icon_size: 16, style: 'margin-right: 10px;' });
@@ -1893,7 +1957,7 @@ class CustomPopup {
 
     openUpwards(isCentered = false) {
         this._isOpen = true;
-        this.actor.opacity = 0; // Invisible pendant le calcul
+        this.actor.opacity = 0;
         
         Mainloop.idle_add(() => {
             if (!this.actor) return false;
@@ -1915,7 +1979,7 @@ class CustomPopup {
             if (finalY < 10) finalY = 10;
 
             this.actor.set_position(finalX, finalY);
-            this.actor.opacity = 255; // On affiche
+            this.actor.opacity = 255;
             
             this._setupClickOutside();
             return false;
@@ -1965,33 +2029,198 @@ class CustomPopup {
     }
 }
 
+class HomeBar {
+    constructor() {
+        this.actor = new St.Button({
+            style_class: 'prism-home-bar',
+            reactive: true,
+            opacity: 0
+        });
+        Main.layoutManager.addChrome(this.actor);
+
+        this._windowSizeId = 0;
+        this._windowMinId = 0;
+        this._currentWindow = null;
+
+        this._setPosition();
+        this._setupEvents();
+        this._setupWindowTracking();
+
+        this._monitorId = Main.layoutManager.connect('monitors-changed', () => this._setPosition());
+    }
+
+    _setupWindowTracking() {
+        this._focusId = global.display.connect('notify::focus-window', () => this._evaluateState());
+        this._workspaceId = global.workspace_manager.connect('workspace-switched', () => this._evaluateState());
+        
+        this._evaluateState();
+    }
+
+    _evaluateState() {
+        let focusWindow = global.display.get_focus_window();
+
+        if (this._currentWindow) {
+            if (this._windowSizeId) this._currentWindow.disconnect(this._windowSizeId);
+            if (this._windowMinId) this._currentWindow.disconnect(this._windowMinId);
+            this._windowSizeId = 0;
+            this._windowMinId = 0;
+        }
+
+        this._currentWindow = focusWindow;
+
+        if (this._currentWindow) {
+            this._windowSizeId = this._currentWindow.connect('size-changed', () => this._applyVisibility());
+            this._windowMinId = this._currentWindow.connect('notify::minimized', () => this._applyVisibility());
+        }
+
+        this._applyVisibility();
+    }
+
+    _applyVisibility() {
+        let workspace = global.workspace_manager.get_active_workspace();
+        let windows = workspace.list_windows().filter(w => !w.is_skip_taskbar() && !w.minimized);
+        
+        let isMaximized = windows.some(w => w.maximized_vertically && w.maximized_horizontally);
+
+        if (isMaximized) {
+            this._showBar();
+        } else {
+            this._hideBar();
+        }
+    }
+
+    _showBar() {
+        this.actor.show();
+        this.actor.ease({
+            opacity: 255,
+            duration: 200,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD
+        });
+    }
+
+    _hideBar() {
+        this.actor.ease({
+            opacity: 0,
+            duration: 200,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => {
+                if (this.actor.opacity === 0) this.actor.hide();
+            }
+        });
+    }
+
+    _setPosition() {
+        let monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor) return;
+
+        let width = 200;
+        let height = 6;
+        let bottomMargin = 4;
+
+        this.actor.set_size(width, height);
+        this.actor.set_position(
+            monitor.x + (monitor.width - width) / 2,
+            monitor.y + monitor.height - height - bottomMargin
+        );
+    }
+
+    _setupEvents() {
+        let pressY = 0;
+        this._singleClickTimeoutId = 0;
+        this._lastClickTime = 0;
+
+        this.actor.connect('button-press-event', (actor, event) => {
+            pressY = event.get_coords()[1];
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        this.actor.connect('button-release-event', (actor, event) => {
+            let releaseY = event.get_coords()[1];
+            
+            if (pressY - releaseY > 10) { 
+                this._lastClickTime = 0;
+                this._minimizeAll();
+                return Clutter.EVENT_PROPAGATE;
+            } 
+
+            let now = Date.now();
+            let timeSinceLastClick = now - this._lastClickTime;
+
+            if (timeSinceLastClick < 300) {
+                if (this._singleClickTimeoutId) {
+                    GLib.Source.remove(this._singleClickTimeoutId);
+                    this._singleClickTimeoutId = 0;
+                }
+                this._lastClickTime = 0;
+                
+                Main.overview.toggle();
+            } else {
+                this._lastClickTime = now;
+                
+                this._singleClickTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                    this._minimizeAll();
+                    this._singleClickTimeoutId = 0;
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+
+            return Clutter.EVENT_PROPAGATE;
+        });
+    }
+
+    _minimizeAll() {
+        let workspace = global.workspace_manager.get_active_workspace();
+        let windows = workspace.list_windows().filter(w => !w.is_skip_taskbar() && !w.minimized);
+        
+        for (let win of windows) {
+            if (win.can_minimize()) {
+                win.minimize();
+            }
+        }
+        
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._applyVisibility();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    destroy() {
+        if (this._singleClickTimeoutId) GLib.Source.remove(this._singleClickTimeoutId);
+
+        if (this._monitorId) Main.layoutManager.disconnect(this._monitorId);
+        if (this._focusId) global.display.disconnect(this._focusId);
+        if (this._workspaceId) global.workspace_manager.disconnect(this._workspaceId);
+        
+        if (this._currentWindow) {
+            if (this._windowSizeId) this._currentWindow.disconnect(this._windowSizeId);
+            if (this._windowMinId) this._currentWindow.disconnect(this._windowMinId);
+        }
+
+        if (this.actor) {
+            Main.layoutManager.removeChrome(this.actor);
+            this.actor.destroy();
+        }
+    }
+}
+
 function init() {
-    if (global.myDock) {
-        global.myDock.destroy();
-        global.myDock = null;
-    }
-    if (global.networkSetting) {
-        global.networkSetting.container.destroy();
-        global.networkSetting = null;
-    }
-    if (global.appLauncher) { // Modifié ici
-        global.appLauncher.hide();
-    }
-    global._timeMachine = new TimeMachine();
-    global.appLauncher = new AppLauncher(); // Modifié ici
-    global.networkSetting = new NetworkSetting();
-    global.myDock = new MyDock();
 }
 
 function enable() {
+    if (!global.networkSetting) global.networkSetting = new NetworkSetting();
+    if (!global.myDock) global.myDock = new MyDock();
+    if (!global._timeMachine) global._timeMachine = new TimeMachine();
+    if (!global.appLauncher) global.appLauncher = new AppLauncher();
+    if (!notificationManager) notificationManager = new NotificationManager();
+
     const syslogo = "preferences-system"
-    notificationManager.showNotification("IUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.", "Système", syslogo);
+    //[DEBUG]notificationManager.showNotification("IUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.", "Système", syslogo);
     let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
     originalWallpaperUri = backgroundSettings.get_string('picture-uri');
     let wallpaperPath = GLib.build_filenamev([Me.dir.get_path(), 'icons', 'interface', 'wallpaper', 'officiel-wallpaper-prismUI.png']);
     let wallpaperUri = GLib.filename_to_uri(wallpaperPath, null);
     backgroundSettings.set_string('picture-uri', wallpaperUri);
-    Main.panel.actor.hide();
+    Main.panel.hide();
 
     global.clipboardManager = new Clipboard.ClipboardManager();
 
@@ -2004,22 +2233,39 @@ function enable() {
         }
         return GLib.SOURCE_REMOVE;
     });
+
+    if (!homeBar) homeBar = new HomeBar();
 }
 
 function disable() {
+    if (global.myDock) {
+        global.myDock.destroy(); 
+        global.myDock = null;
+    }
 
-    let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
+    if (global.notificationManager) {
+        global.notificationManager = null; 
+    }
+    
+    if (global.networkSetting) {
+        global.networkSetting.destroy();
+        global.networkSetting = null;
+    }
+
+    if (global._timeMachine) {
+        global._timeMachine.destroy();
+        global._timeMachine = null;
+    }
 
     if (global.clipboardManager) {
-        global.clipboardManager.destroy(); // Arrête la boucle de surveillance
+        global.clipboardManager.destroy();
         global.clipboardManager = null;
     }
-    // Rétablissez le fond d'écran original
-    if (originalWallpaperUri) {
-        backgroundSettings.set_string('picture-uri', originalWallpaperUri);
+
+    if (homeBar) {
+        homeBar.destroy();
+        homeBar = null;
     }
-    if (monitor) {
-        Main.screenShield.disconnect(monitor);
-    }
-    Main.panel.actor.show();
+
+    Main.panel.show();
 }
