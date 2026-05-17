@@ -116,7 +116,7 @@ class MyDock {
         icon.set_child(iconImage);
 
         let pressStartTime = null;
-        const longPressDuration = 3000;
+        const longPressDuration = 1000;
 
         icon.connect('button-press-event', (actor, event) => {
             if (event.get_button() === 1) pressStartTime = Date.now();
@@ -127,7 +127,7 @@ class MyDock {
                 let pressDuration = Date.now() - pressStartTime;
                 pressStartTime = null;
                 if (pressDuration >= longPressDuration) {
-                    this._shutdownPC();
+                    this._toggleContextMenu(icon);
                 } else {
                     if (global.appLauncher) {
                         global.appLauncher.toggle();
@@ -160,20 +160,27 @@ class MyDock {
         let [iconX, iconY] = sourceActor.get_transformed_position();
         let iconWidth = sourceActor.width;
         let centerX = iconX + (iconWidth / 2);
-        let topY = iconY + 10;
+        let topY = iconY - 10;
         this.customDockMenu = new CustomPopup(centerX, topY);
+
+        this.customDockMenu.addItem("Afficher le bureau", () => {
+            let workspace = global.workspace_manager.get_active_workspace();
+            workspace.list_windows().forEach(window => {
+                if (window.can_minimize()) {
+                    window.minimize();
+                }
+            });
+        }, "user-desktop-symbolic");
 
         this.customDockMenu.addItem("Ajuster la fenêtre", () => {
             if (global.networkSetting) global.networkSetting._fitWindowToDock();
         }, "view-restore-symbolic");
 
         this.customDockMenu.addItem("Presse-papier", () => {
-            
             if (menu) { menu.destroy(); menu = null; }
             if (global.networkSetting && typeof global.networkSetting._closeAllMenus === 'function') {
                 global.networkSetting._closeAllMenus();
             }
-
             if (global.clipboardManager) {
                 global.clipboardManager.toggleMenu(sourceActor);
             } else if (Me.imports.clipboard) {
@@ -182,38 +189,88 @@ class MyDock {
             }
         }, "edit-paste-symbolic");
 
-        this.customDockMenu.addItem("Informations", () => {
-            let dialog = new AboutDialog();
-            dialog.open();
-        }, "dialog-information-symbolic");
+        this._addSeparator(this.customDockMenu);
 
         const iconName = this._editMode ? 'edit-delete-symbolic' : 'list-add-symbolic';
-
-        this.customDockMenu.addItem("Ajouter/modifier des logiciel a la barre de tache", () => {
-            if (menu) {
-                menu.destroy();
-                menu = null;
-            }
+        this.customDockMenu.addItem("Ajouter/modifier des logiciels", () => {
+            if (menu) { menu.destroy(); menu = null; }
             if (global.networkSetting && global.networkSetting._closeAllMenus) {
                 global.networkSetting._closeAllMenus();
             }
-
             if (this._editMode) {
                 this._editMode = false;
                 this._updateAddIcon();
                 return;
             }
-
             this._openAppChooser();
-        }, iconName)
+        }, iconName);
+
+        this.customDockMenu.addItem("Informations", () => {
+            let dialog = new AboutDialog();
+            dialog.open();
+        }, "dialog-information-symbolic");
+
+        this._addSeparator(this.customDockMenu);
+
+        this.customDockMenu.addItem("Mettre en veille", () => {
+            GLib.spawn_command_line_async('systemctl suspend');
+        }, "weather-clear-night-symbolic");
+
+        this.customDockMenu.addItem("Se déconnecter", () => {
+            GLib.spawn_command_line_async('gnome-session-quit --logout'); 
+        }, "system-log-out-symbolic");
+
+        this.customDockMenu.addItem("Redémarrer", () => {
+            GLib.spawn_command_line_async('gnome-session-quit --reboot');
+        }, "system-reboot-symbolic");
+
+        this.customDockMenu.addItem("Arrêter", () => {
+            GLib.spawn_command_line_async('gnome-session-quit --power-off');
+        }, "system-shutdown-symbolic");
 
         this.customDockMenu.openUpwards(true);
 
+        let stageEventId = global.stage.connect('captured-event', (stage, event) => {
+            if (event.type() === Clutter.EventType.BUTTON_PRESS || event.type() === Clutter.EventType.TOUCH_BEGIN) {
+                let target = event.get_source();
+                if (sourceActor && sourceActor.contains(target)) {
+                    return Clutter.EVENT_PROPAGATE; 
+                }
+
+                let menuActor = this.customDockMenu.actor; 
+                
+                if (menuActor && !menuActor.contains(target)) {
+                    this.customDockMenu.destroy();
+                    return Clutter.EVENT_PROPAGATE; 
+                }
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+
         let originalDestroy = this.customDockMenu.destroy.bind(this.customDockMenu);
         this.customDockMenu.destroy = () => {
+            if (stageEventId) {
+                global.stage.disconnect(stageEventId);
+                stageEventId = 0;
+            }
+            
             originalDestroy();
             this.customDockMenu = null;
         };
+    }
+
+    _addSeparator(targetMenu) {
+        let separator = new St.BoxLayout({
+            style_class: 'popup-separator-menu-item',
+            height: 1, 
+            style: 'background-color: rgba(255, 255, 255, 0.2); margin-top: 5px; margin-bottom: 5px;',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
+        });
+
+        if (targetMenu.actor) {
+            targetMenu.actor.add_child(separator);
+        }
     }
 
     _showTooltip(text, icon) {
@@ -1361,8 +1418,8 @@ async _accessibilityMenu() {
                 reactive: true
             });
     
-            let iconPathOn = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/toggle/toggle-button-on.png`; // Chemin de l'icône pour l'état activé
-            let iconPathOff = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/toggle/toggle-button-off.png`; // Chemin de l'icône pour l'état désactivé
+            let iconPathOn = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/toggle/toggle-button-on.png`;
+            let iconPathOff = `${ExtensionUtils.getCurrentExtension().path}/icons/interface/toggle/toggle-button-off.png`;
     
             let icon = new St.Icon({
                 gicon: Gio.icon_new_for_string(this._getSetting(setting.schema, setting.key) ? iconPathOn : iconPathOff),
@@ -1564,7 +1621,7 @@ _handleBarClick() {
             log("Erreur Luminosité DBus: " + e.message);
         }
 
-    let bottomBox = new St.BoxLayout({name: 'bottomBox', style_class: 'bottom-box', vertical: false }); // Assurez-vous que c'est horizontal
+    let bottomBox = new St.BoxLayout({name: 'bottomBox', style_class: 'bottom-box', vertical: false });
 
         let powerButtonsBox = new St.BoxLayout({name: 'powerbtn', style_class: 'power-buttons-box' });
         
@@ -2243,8 +2300,9 @@ function disable() {
         global.myDock = null;
     }
 
-    if (global.notificationManager) {
-        global.notificationManager = null; 
+    if (notificationManager) {
+        notificationManager.destroy();
+        notificationManager = null; 
     }
     
     if (global.networkSetting) {

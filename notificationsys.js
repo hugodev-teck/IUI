@@ -442,7 +442,8 @@ var NotificationManager = class NotificationManager {
         this._sourceAddedSignal = Main.messageTray.connect('source-added', (tray, source) => {
             let notifAddedSignal = source.connect('notification-added', (source, notification) => {
                 let title = notification.title || "Nouvelle notification";
-                let message = notification.body || notification.bannerBodyText || "";
+                let rawMessage = notification.body || notification.bannerBodyText || "";
+                let cleanMessage = rawMessage.replace(/<[^>]+>/g, '');
                 let appName = source.title || "Système";
                 let gicon = notification.gicon || source.icon || Gio.icon_new_for_string('dialog-information-symbolic');
                 let app = source.app || null;
@@ -456,7 +457,7 @@ var NotificationManager = class NotificationManager {
                     }
                 }
 
-                this.showNotification(title, message, appName, gicon, app);
+                this.showNotification(title, cleanMessage, appName, gicon, app);
 
                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                     try {
