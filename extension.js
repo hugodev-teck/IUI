@@ -22,9 +22,7 @@ const PopupMenu = imports.ui.popupMenu;
 const Lang = imports.lang;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
-const NotificationManager = Me.imports.notificationsys.NotificationManager;
-const AppLauncher = Me.imports.intelligentsearchbar.AppLauncher;
-const TimeMachine = Me.imports.time.TimeMachine;
+
 const Util = imports.misc.util;
 const { ByteArray } = imports.byteArray;
 const Gio = imports.gi.Gio;
@@ -38,11 +36,11 @@ const Shell = imports.gi.Shell;
 const Gvc = imports.gi.Gvc;
 const ModalDialog = imports.ui.modalDialog;
 const Soup = imports.gi.Soup;
-const Clipboard = Me.imports.clipboard;
 
 const BINDING_NAME = 'toggle-overview';
 const DUMMY_KEY = 'super-block';
 
+let NotificationManager, AppLauncher, TimeMachine, PrismWidgets, Clipboard;
 let searchBar;
 let pollingId;
 let homeBar;
@@ -80,9 +78,19 @@ class MyDock {
         this.addCustomIcon(`${ExtensionUtils.getCurrentExtension().path}/icons/dt.png`, "DeskTools");
 
         let apps = this.settings.get_strv('dock-apps');
+
+        this._separator = new St.Widget({
+            style_class: 'dock-separator',
+            y_align: Clutter.ActorAlign.CENTER,
+            visible: false,
+            style: 'width: 2px; height: 30px; background-color: rgba(255, 255, 255, 0.2); margin: 0 10px; border-radius: 1px;'
+        });
+
         for (let desktop of apps) {
-            this.addAppIcon(desktop);
+            this.addAppIcon(desktop, true);
         }
+
+        this.container.add_child(this._separator);
 
         Main.layoutManager._backgroundGroup.add_child(this.container);
 
@@ -107,6 +115,155 @@ class MyDock {
         this._dockMonitorId = Main.layoutManager.connect('monitors-changed', () => {
             this._setPosition();
         });
+
+        this._initMediaTracker();
+        this._initAppTracker()
+    }
+
+    _initMediaTracker() {
+        
+        let bus = Gio.bus_get_sync(Gio.BusType.SESSION, null);
+
+        this._nameOwnerChangedId = bus.signal_subscribe(
+            'org.freedesktop.DBus', 
+            'org.freedesktop.DBus', 
+            'NameOwnerChanged',     
+            '/org/freedesktop/DBus', 
+            null, 
+            Gio.DBusSignalFlags.NONE,
+            (connection, sender, path, iface, signal, params) => {
+                let unpacked = params.deep_unpack();
+                if (!unpacked || unpacked.length < 3) return;
+                
+                let [name, oldOwner, newOwner] = unpacked;
+                
+                if (typeof name !== 'string') return;
+
+                if (name.startsWith('org.mpris.MediaPlayer2.') && oldOwner === '' && newOwner !== '') {
+                    if (!this._mediaProxy) {
+                        this._connectToPlayer(name);
+                    }
+                }
+            }
+        );
+
+        let result = bus.call_sync(
+            'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+            'ListNames', null, null, Gio.DBusCallFlags.NONE, -1, null
+        );
+
+        let names = result.deep_unpack()[0];
+        let playerName = names.find(n => n.startsWith('org.mpris.MediaPlayer2.'));
+
+        if (playerName) {
+            this._connectToPlayer(playerName);
+        }
+    }
+
+    _connectToPlayer(playerName) {
+        if (this._mediaProxy) return;
+
+        let cleanAppName = playerName.replace('org.mpris.MediaPlayer2.', '').toLowerCase();
+        cleanAppName = cleanAppName.split('.instance')[0];
+        
+
+        this._mediaProxy = Gio.DBusProxy.new_for_bus_sync(
+            Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, null,
+            playerName, '/org/mpris/MediaPlayer2', 'org.mpris.MediaPlayer2.Player', null
+        );
+
+        const updateUI = () => {
+            let statusProp = this._mediaProxy.get_cached_property('PlaybackStatus');
+            let metaProp = this._mediaProxy.get_cached_property('Metadata');
+            let desktopProp = this._mediaProxy.get_cached_property('DesktopEntry');
+
+            let status = statusProp ? statusProp.unpack() : 'Inconnu';
+            let targetApp = desktopProp ? desktopProp.unpack().toLowerCase() : cleanAppName;
+            targetApp = targetApp.split('.instance')[0];
+
+            if (status === 'Playing' || status === 'Paused') {
+                let metadata = metaProp ? metaProp.deep_unpack() : {};
+                let title = metadata['xesam:title'] ? metadata['xesam:title'].unpack() : 'Piste inconnue';
+                let length = metadata['mpris:length'] ? metadata['mpris:length'].unpack() : 0;
+                let posProp = this._mediaProxy.get_cached_property('Position');
+                let position = posProp ? posProp.unpack() : 0;
+                
+                this._expandAppIcon(targetApp, title, (status === 'Playing'), length, position);
+            } else {
+                this._collapseAppIcon(targetApp);
+            }
+        };
+
+        this._mediaSignalId = this._mediaProxy.connect('g-properties-changed', () => updateUI());
+        updateUI();
+
+        this._mediaOwnerId = this._mediaProxy.connect('notify::g-name-owner', () => {
+            if (!this._mediaProxy.get_name_owner()) {
+                this._collapseAppIcon(cleanAppName);
+                this._mediaProxy.disconnect(this._mediaSignalId);
+                this._mediaProxy.disconnect(this._mediaOwnerId);
+                this._mediaProxy = null; 
+            }
+        });
+    }
+
+    _initAppTracker() {
+        this._appSystem = Shell.AppSystem.get_default();
+        let pinnedApps = this.settings.get_strv('dock-apps') || [];
+
+        let runningApps = this._appSystem.get_running();
+        for (let app of runningApps) {
+            let appId = app.get_id();
+            if (!pinnedApps.includes(appId)) {
+                this.addAppIcon(appId, false);
+            }
+        }
+        this._updateSeparatorVisibility();
+
+        this._appStateChangedId = this._appSystem.connect('app-state-changed', (sys, app) => {
+            let state = app.get_state();
+            let appId = app.get_id();
+            
+            let existingIcon = this._findIconByAppId(appId);
+
+            if (state === Shell.AppState.RUNNING) {
+                if (!existingIcon) {
+                    this.addAppIcon(appId, false);
+                    this._updateSeparatorVisibility();
+                } else {
+                    this._updateAppDots(existingIcon, appId);
+                }
+            } else if (state === Shell.AppState.STOPPED) {
+                if (existingIcon && (!existingIcon._mediaBox || !existingIcon._mediaBox.visible)) {
+                    if (!existingIcon._isPinned) {
+                        existingIcon.destroy();
+                        this._updateSeparatorVisibility();
+                    } else {
+                        this._updateAppDots(existingIcon, appId);
+                    }
+                }
+            }
+        });
+    }
+
+    _findIconByAppId(appId) {
+        let children = this.container.get_children();
+        for (let child of children) {
+            if (child._appId === appId) return child;
+        }
+        return null;
+    }
+
+    _updateSeparatorVisibility() {
+        if (!this._separator) return;
+        let children = this.container.get_children();
+        let sepIndex = children.indexOf(this._separator);
+        
+        if (sepIndex !== -1 && sepIndex < children.length - 1) {
+            this._separator.show();
+        } else {
+            this._separator.hide();
+        }
     }
 
     addCustomIconMenu(iconPath, labelText = '') {
@@ -117,6 +274,8 @@ class MyDock {
 
         let pressStartTime = null;
         const longPressDuration = 1000;
+
+        icon.reactive = true;
 
         icon.connect('button-press-event', (actor, event) => {
             if (event.get_button() === 1) pressStartTime = Date.now();
@@ -143,6 +302,37 @@ class MyDock {
             }
         });
 
+        icon.connect('touch-event', (actor, event) => {
+        let type = event.type();
+
+        if (type === Clutter.EventType.TOUCH_BEGIN) {
+            pressStartTime = Date.now();
+            return Clutter.EVENT_PROPAGATE; 
+        } 
+        
+        else if (type === Clutter.EventType.TOUCH_END) {
+            if (pressStartTime) {
+                let pressDuration = Date.now() - pressStartTime;
+                pressStartTime = null;
+                
+                if (pressDuration >= longPressDuration) {
+                    this._toggleContextMenu(icon);
+                } 
+                else {
+                    if (global.appLauncher) {
+                        global.appLauncher.toggle();
+                    }
+                    if (global.networkSetting && global.networkSetting._closeAllMenus) {
+                        global.networkSetting._closeAllMenus();
+                    }
+                }
+            }
+            return Clutter.EVENT_PROPAGATE;
+        }
+        
+        return Clutter.EVENT_PROPAGATE;
+    });
+
         if (labelText) {
             icon.connect('enter-event', () => this._showTooltip(labelText, icon));
             icon.connect('leave-event', () => this._hideTooltip());
@@ -162,6 +352,19 @@ class MyDock {
         let centerX = iconX + (iconWidth / 2);
         let topY = iconY - 10;
         this.customDockMenu = new CustomPopup(centerX, topY);
+
+        this.customDockMenu.addItem("Gérer les widgets", () => {
+            if (menu) { menu.destroy(); menu = null; }
+            if (global.networkSetting && typeof global.networkSetting._closeAllMenus === 'function') {
+                global.networkSetting._closeAllMenus();
+            }
+            // On appelle notre module de widgets !
+            if (global.prismWidgets) {
+                global.prismWidgets._toggleWidgetMenu();
+            }
+        }, "view-app-grid-symbolic");
+
+        this._addSeparator(this.customDockMenu);
 
         this.customDockMenu.addItem("Afficher le bureau", () => {
             let workspace = global.workspace_manager.get_active_workspace();
@@ -206,7 +409,8 @@ class MyDock {
         }, iconName);
 
         this.customDockMenu.addItem("Informations", () => {
-            let dialog = new AboutDialog();
+            let updater = new UpdateManager(this); // On crée l'instance ici
+            let dialog = new AboutDialog(updater); // On la passe en paramètre
             dialog.open();
         }, "dialog-information-symbolic");
 
@@ -325,103 +529,182 @@ class MyDock {
     }
 
     _openAppChooser() {
-        if (this.popupMenu) {
-            this.popupMenu.destroy();
-            this.popupMenu = null;
-            return;
+        if (this.appManagerDialog) {
+            this.appManagerDialog.close();
+            this.appManagerDialog = null;
         }
 
-        this.popupMenu = new St.BoxLayout({
-            name: 'PopUP-menu',
-            vertical: true,
-            style_class: 'app-chooser-menu',
-            reactive: true,
-            can_focus: true
+        this.appManagerDialog = new ModalDialog.ModalDialog({
+            styleClass: 'prism-app-manager-dialog',
+            destroyOnClose: true
         });
-        Main.uiGroup.add_child(this.popupMenu);
 
+        // --- CALCUL DES 80% DE L'ÉCRAN ---
         let monitor = Main.layoutManager.primaryMonitor;
-        let menuWidth = 240;
-        let menuHeight = 400;
+        let targetHeight = Math.floor(monitor.height * 0.8);
 
-        let posX = Math.floor(monitor.x + (monitor.width - menuWidth) / 2);
-        let posY = Math.floor(monitor.y + (monitor.height - menuHeight) / 2);
-
-        this.popupMenu.set_position(posX, posY);
-        this.popupMenu.set_size(menuWidth, menuHeight);
-
-        let editItem = new St.Button({
-            label: "🗑️ Supprimer des logiciels",
-            style_class: 'app-chooser-item'
+        let mainBox = new St.BoxLayout({ 
+            vertical: false, 
+            x_expand: true, 
+            y_expand: true,
+            height: targetHeight // Application de la contrainte ici
         });
-        editItem.connect('clicked', () => {
-            this._editMode = true;
-            this._updateAddIcon();
-            this.popupMenu.destroy();
-            this.popupMenu = null;
+
+        // --- COLONNE GAUCHE (Toutes les applications) ---
+        let leftCol = new St.BoxLayout({ vertical: true, width: 350, style: 'margin-right: 20px;' });
+        leftCol.add_child(new St.Label({ text: "Logiciels disponibles", style: 'font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #81D4FA;' }));
+        
+        let leftScroll = new St.ScrollView({ style_class: 'vfade', hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true, y_expand: true });
+        this._systemAppList = new St.BoxLayout({ vertical: true });
+        leftScroll.add_actor(this._systemAppList);
+        leftCol.add_child(leftScroll);
+
+        // --- COLONNE DROITE (Ton Dock) ---
+        let rightCol = new St.BoxLayout({ vertical: true, width: 350 });
+        rightCol.add_child(new St.Label({ text: "Dans le Dock", style: 'font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #A5D6A7;' }));
+        
+        let rightScroll = new St.ScrollView({ style_class: 'vfade', hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true, y_expand: true });
+        this._dockAppList = new St.BoxLayout({ vertical: true });
+        rightScroll.add_actor(this._dockAppList);
+        rightCol.add_child(rightScroll);
+
+        mainBox.add_child(leftCol);
+        
+        // Séparateur central
+        mainBox.add_child(new St.Widget({ style: 'width: 2px; background-color: rgba(255,255,255,0.1); margin-right: 20px;' }));
+        
+        mainBox.add_child(rightCol);
+
+        this.appManagerDialog.contentLayout.add_child(mainBox);
+
+        // Bouton de fermeture en bas
+        this.appManagerDialog.addButton({
+            label: 'Terminer',
+            action: () => {
+                this.appManagerDialog.close();
+                this.appManagerDialog = null;
+            },
+            key: Clutter.KEY_Escape
         });
-        this.popupMenu.add_child(editItem);
 
-        let sep = new St.Label({ text: '───────────────────────' });
-        this.popupMenu.add_child(sep);
+        this._refreshAppManagerUI();
+        this.appManagerDialog.open();
+    }
 
-        let scroll = new St.ScrollView({
-            style_class: 'app-chooser-scroll',
-            hscrollbar_policy: St.PolicyType.NEVER,
-            vscrollbar_policy: St.PolicyType.AUTOMATIC
-        });
-        let list = new St.BoxLayout({ 
-            name: 'app-list',
-            vertical: true 
-        });
-        scroll.add_actor(list);
-        this.popupMenu.add_child(scroll);
+    _refreshAppManagerUI() {
+        if (!this._systemAppList || !this._dockAppList) return;
 
-        let allApps = Gio.AppInfo.get_all()
-            .filter(a => a.should_show())
-            .sort((a, b) => a.get_name().localeCompare(b.get_name()));
+        this._systemAppList.destroy_all_children();
+        this._dockAppList.destroy_all_children();
 
-        for (let app of allApps.slice(0, 150)) {
-            let item = new St.Button({ style_class: 'app-chooser-item' });
-            let row = new St.BoxLayout({ 
-                name: 'app-row',
-                vertical: false 
+        let dockAppsIds = this.settings.get_strv('dock-apps') || [];
+        let allApps = Gio.AppInfo.get_all().filter(a => a.should_show()).sort((a, b) => a.get_name().localeCompare(b.get_name()));
+
+        // 1. Remplir la colonne de DROITE (Dock)
+        for (let i = 0; i < dockAppsIds.length; i++) {
+            let appId = dockAppsIds[i];
+            let appInfo = Gio.DesktopAppInfo.new(appId);
+            if (!appInfo) continue;
+
+            let row = new St.BoxLayout({ vertical: false, style: 'padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);' });
+            let icon = new St.Icon({ gicon: appInfo.get_icon(), icon_size: 24, style: 'margin-right: 10px;' });
+            let label = new St.Label({ text: appInfo.get_name(), y_align: Clutter.ActorAlign.CENTER, x_expand: true });
+            
+            // Flèche Haut (Icône GNOME native)
+            let upBtn = new St.Button({ 
+                child: new St.Icon({ icon_name: 'go-up-symbolic', icon_size: 16 }), 
+                style_class: 'prism-widget-menu-btn', style: 'padding: 5px; margin-right: 5px;', reactive: true 
             });
+            if (i === 0) upBtn.opacity = 0; 
+            else upBtn.connect('clicked', () => this._moveAppInDock(i, -1));
 
-            let icon = new St.Icon({
-                gicon: app.get_icon(),
-                icon_size: 20,
-                style_class: 'app-chooser-icon'
+            // Flèche Bas (Icône GNOME native)
+            let downBtn = new St.Button({ 
+                child: new St.Icon({ icon_name: 'go-down-symbolic', icon_size: 16 }), 
+                style_class: 'prism-widget-menu-btn', style: 'padding: 5px; margin-right: 10px;', reactive: true 
             });
+            if (i === dockAppsIds.length - 1) downBtn.opacity = 0; 
+            else downBtn.connect('clicked', () => this._moveAppInDock(i, 1));
 
-            let label = new St.Label({
-                text: app.get_name(),
-                y_align: Clutter.ActorAlign.CENTER
+            // Bouton Retirer (Icône GNOME native en rouge)
+            let removeBtn = new St.Button({ 
+                child: new St.Icon({ icon_name: 'list-remove-symbolic', icon_size: 16 }), 
+                style_class: 'prism-widget-menu-btn', style: 'padding: 5px; color: #ff5555;', reactive: true 
+            });
+            removeBtn.connect('clicked', () => {
+                let newApps = dockAppsIds.filter(a => a !== appId);
+                this.settings.set_strv('dock-apps', newApps);
+                this._reloadDockIcons();
+                this._refreshAppManagerUI();
             });
 
             row.add_child(icon);
             row.add_child(label);
-            item.set_child(row);
-
-            item.connect('clicked', () => {
-                this._addApp(app.get_id());
-                this.popupMenu.destroy();
-                this.popupMenu = null;
-            });
-
-            list.add_child(item);
+            row.add_child(upBtn);
+            row.add_child(downBtn);
+            row.add_child(removeBtn);
+            this._dockAppList.add_child(row);
         }
 
-        this._globalClickHandler = global.stage.connect('button-press-event', () => {
-            if (this.popupMenu) {
-                this.popupMenu.destroy();
-                this.popupMenu = null;
+        // 2. Remplir la colonne de GAUCHE (Système)
+        for (let app of allApps) {
+            let appId = app.get_id();
+            if (dockAppsIds.includes(appId)) continue; 
+
+            let row = new St.BoxLayout({ vertical: false, style: 'padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);' });
+            let icon = new St.Icon({ gicon: app.get_icon(), icon_size: 24, style: 'margin-right: 10px;' });
+            let label = new St.Label({ text: app.get_name(), y_align: Clutter.ActorAlign.CENTER, x_expand: true });
+            
+            // Bouton Ajouter (Icône GNOME native en vert)
+            let addBtn = new St.Button({ 
+                child: new St.Icon({ icon_name: 'list-add-symbolic', icon_size: 16 }), 
+                style_class: 'prism-widget-menu-btn', style: 'padding: 5px; color: #81C784;', reactive: true 
+            });
+            addBtn.connect('clicked', () => {
+                dockAppsIds.push(appId);
+                this.settings.set_strv('dock-apps', dockAppsIds);
+                this._reloadDockIcons();
+                this._refreshAppManagerUI();
+            });
+
+            row.add_child(icon);
+            row.add_child(label);
+            row.add_child(addBtn);
+            this._systemAppList.add_child(row);
+        }
+    }
+
+    _moveAppInDock(index, direction) {
+        let apps = this.settings.get_strv('dock-apps') || [];
+        if (index + direction < 0 || index + direction >= apps.length) return;
+
+        // On échange les deux applications dans le tableau
+        let temp = apps[index];
+        apps[index] = apps[index + direction];
+        apps[index + direction] = temp;
+
+        this.settings.set_strv('dock-apps', apps);
+        this._reloadDockIcons();
+        this._refreshAppManagerUI();
+    }
+
+    _reloadDockIcons() {
+        // On détruit toutes les icônes actuelles du dock sauf les éléments fixes
+        let children = this.container.get_children();
+        for (let child of children) {
+            // On ne détruit pas le séparateur
+            if (child === this._separator) continue;
+            // On ne détruit pas le menu principal et desktools (qui n'ont pas d'_appId)
+            if (child._appId) {
+                child.destroy();
             }
-            if (this._globalClickHandler) {
-                global.stage.disconnect(this._globalClickHandler);
-                this._globalClickHandler = null;
-            }
-        });
+        }
+
+        // On recrée les icônes dans le nouvel ordre
+        let apps = this.settings.get_strv('dock-apps') || [];
+        for (let desktop of apps) {
+            this.addAppIcon(desktop, true);
+        }
     }
 
 
@@ -430,12 +713,12 @@ class MyDock {
         if (!apps.includes(desktopFile)) {
             apps.push(desktopFile);
             this.settings.set_strv('dock-apps', apps);
-            this.addAppIcon(desktopFile);
+            this.addAppIcon(desktop, true);
         }
     }
 
 
-    addAppIcon(desktopFile) {
+    addAppIcon(desktopFile, isPinned = true) {
         let appInfo = Gio.DesktopAppInfo.new(desktopFile);
         if (!appInfo) {
             log(`App not found: ${desktopFile}`);
@@ -443,9 +726,120 @@ class MyDock {
         }
 
         let icon = new St.Button({ style_class: 'app-icon' });
+        
+        let iconContainer = new St.BoxLayout({
+            vertical: false,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+
         let gicon = appInfo.get_icon();
         let iconImage = new St.Icon({ gicon: gicon, icon_size: 50 });
-        icon.set_child(iconImage);
+        
+        let overlapWrapper = new St.Widget({
+            layout_manager: new Clutter.BinLayout()
+        });
+
+        icon._dotContainer = new St.BoxLayout({
+            vertical: false,
+            style_class: 'app-dot-container',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.END,
+            translation_y: 30
+        });
+
+        overlapWrapper.add_child(iconImage);
+        overlapWrapper.add_child(icon._dotContainer);
+
+        iconContainer.add_child(overlapWrapper);
+
+        icon._mediaBox = new St.BoxLayout({
+            vertical: false,
+            y_align: Clutter.ActorAlign.CENTER,
+            style_class: 'media-dock-box',
+            visible: false, 
+            opacity: 0,
+            style: 'margin-left: 10px;' 
+        });
+
+        let infoBox = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'margin-right: 12px; min-width: 120px; max-width: 150px;'
+        });
+
+        icon._titleContainer = new St.Widget({
+            clip_to_allocation: true,
+            x_expand: true,
+            height: 20
+        });
+
+        icon._mediaLabel = new St.Label({
+            text: '',
+            style: 'font-weight: bold; font-size: 13px;'
+        });
+        
+        icon._titleContainer.add_child(icon._mediaLabel);
+
+        icon._progressTrack = new St.BoxLayout({
+            style_class: 'media-progress-bar',
+            y_align: Clutter.ActorAlign.END,
+            x_expand: true,
+            style: 'margin-top: 4px;'
+        });
+
+        icon._progressFill = new St.Widget({
+            style_class: 'media-progress-fill',
+            x_expand: false,
+            width: 0
+        });
+        icon._progressTrack.add_child(icon._progressFill);
+
+        infoBox.add_child(icon._titleContainer);
+        infoBox.add_child(icon._progressTrack);
+
+        let controlsBox = new St.BoxLayout({
+            vertical: false,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+
+        icon._mediaPrevBtn = new St.Button({
+            child: new St.Icon({ icon_name: 'media-skip-backward-symbolic', icon_size: 16 }),
+            style_class: 'media-control-btn'
+        });
+        icon._mediaPrevBtn.connect('clicked', () => {
+            if (this._mediaProxy) this._mediaProxy.call_sync('Previous', null, Gio.DBusCallFlags.NONE, -1, null);
+            return Clutter.EVENT_STOP;
+        });
+
+        icon._mediaPlayBtn = new St.Button({
+            child: new St.Icon({ icon_name: 'media-playback-pause-symbolic', icon_size: 20 }),
+            style_class: 'media-control-btn media-play-btn'
+        });
+        icon._mediaPlayBtn.connect('clicked', () => {
+            if (this._mediaProxy) this._mediaProxy.call_sync('PlayPause', null, Gio.DBusCallFlags.NONE, -1, null);
+            return Clutter.EVENT_STOP;
+        });
+
+        icon._mediaNextBtn = new St.Button({
+            child: new St.Icon({ icon_name: 'media-skip-forward-symbolic', icon_size: 16 }),
+            style_class: 'media-control-btn'
+        });
+        icon._mediaNextBtn.connect('clicked', () => {
+            if (this._mediaProxy) this._mediaProxy.call_sync('Next', null, Gio.DBusCallFlags.NONE, -1, null);
+            return Clutter.EVENT_STOP;
+        });
+
+        controlsBox.add_child(icon._mediaPrevBtn);
+        controlsBox.add_child(icon._mediaPlayBtn);
+        controlsBox.add_child(icon._mediaNextBtn);
+
+        icon._mediaBox.add_child(infoBox);
+        icon._mediaBox.add_child(controlsBox);
+        
+        iconContainer.add_child(icon._mediaBox);
+        icon.set_child(iconContainer);
+        icon._appId = desktopFile;
 
         icon.connect('enter-event', () => {
             this._showTooltip(appInfo.get_name(), icon);
@@ -495,34 +889,264 @@ class MyDock {
             }
         });
 
-        if (this.addButton) {
-            let index = this.container.get_children().indexOf(this.addButton);
-            if (index === -1)
+        let app = Shell.AppSystem.get_default().lookup_app(desktopFile);
+        
+        if (app) {
+            icon._windowsChangedId = app.connect('windows-changed', () => {
+                this._updateAppDots(icon, desktopFile);
+            });
+            this._updateAppDots(icon, desktopFile);
+        }
+
+        icon._isPinned = isPinned;
+
+        if (isPinned && this._separator) {
+            let sepIndex = this.container.get_children().indexOf(this._separator);
+            if (sepIndex !== -1) {
+                this.container.insert_child_at_index(icon, sepIndex);
+            } else {
                 this.container.add_child(icon);
-            else
-                this.container.insert_child_at_index(icon, index);
+            }
         } else {
             this.container.add_child(icon);
+        }
+
+        this._updateSeparatorVisibility();
+    }
+
+    _expandAppIcon(cleanAppName, title, isPlaying, length = 0, position = 0) {
+        let targetIcon = null;
+        let children = this.container.get_children();
+
+        for (let child of children) {
+            if (child._appId) {
+                let dockAppId = child._appId.toLowerCase();
+                if (dockAppId.includes(cleanAppName) || cleanAppName.includes(dockAppId.replace('.desktop', ''))) {
+                    targetIcon = child;
+                    break;
+                }
+            }
+        }
+
+        if (!targetIcon) {
+            let allApps = Gio.AppInfo.get_all();
+            
+            let matchedApp = allApps.find(app => {
+                let id = app.get_id() ? app.get_id().toLowerCase() : '';
+                return id.includes(cleanAppName) || cleanAppName.includes(id.replace('.desktop', ''));
+            });
+
+            if (matchedApp) {
+                let desktopId = matchedApp.get_id();
+                this.addAppIcon(desktop, false);
+                
+                let newChildren = this.container.get_children();
+                for (let child of newChildren) {
+                    if (child._appId === desktopId) {
+                        targetIcon = child;
+                        targetIcon._isTempMediaIcon = true; 
+                        break;
+                    }
+                }
+            } else {
+                return;
+            }
+        }
+
+        if (!targetIcon || !targetIcon._mediaBox) {
+            return;
+        }
+
+        targetIcon._mediaLabel.set_text(title);
+        let iconName = isPlaying ? 'media-playback-pause-symbolic' : 'media-playback-start-symbolic';
+        targetIcon._mediaPlayBtn.get_child().set_icon_name(iconName);
+
+        if (!targetIcon._mediaBox.visible) {
+            targetIcon.add_style_class_name('media-active-capsule');
+            targetIcon._mediaBox.show(); 
+            targetIcon._mediaBox.ease({
+                opacity: 255,
+                duration: 300,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD
+            });
+        }
+
+        targetIcon._mediaLabel.translation_x = 0;
+        targetIcon._mediaLabel.remove_all_transitions();
+        
+        Mainloop.idle_add(() => {
+            if (!targetIcon || !targetIcon._mediaLabel) return GLib.SOURCE_REMOVE;
+            
+            let labelWidth = targetIcon._mediaLabel.get_width();
+            let containerWidth = targetIcon._titleContainer.get_width();
+            
+            if (labelWidth > containerWidth && containerWidth > 0) {
+                let distance = labelWidth - containerWidth + 5; 
+                let speed = distance * 100;
+                
+                const slideLeft = () => {
+                    if (!targetIcon || !targetIcon._mediaLabel) return GLib.SOURCE_REMOVE;
+                    targetIcon._mediaLabel.ease({
+                        translation_x: -distance,
+                        duration: speed,
+                        mode: Clutter.AnimationMode.LINEAR,
+                        onComplete: () => {
+                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, slideRight);
+                        }
+                    });
+                    return GLib.SOURCE_REMOVE;
+                };
+                
+                const slideRight = () => {
+                    if (!targetIcon || !targetIcon._mediaLabel) return GLib.SOURCE_REMOVE;
+                    targetIcon._mediaLabel.ease({
+                        translation_x: 0,
+                        duration: Math.max(speed / 2, 500),
+                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                        onComplete: () => {
+                            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, slideLeft);
+                        }
+                    });
+                    return GLib.SOURCE_REMOVE;
+                };
+                
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1500, slideLeft);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+
+        if (this._progressTimerId) {
+            GLib.Source.remove(this._progressTimerId);
+            this._progressTimerId = null;
+        }
+
+        const updateProgressBar = (currentPos) => {
+            if (length > 0) {
+                let percent = currentPos / length;
+                if (percent > 1) percent = 1;
+                let trackWidth = targetIcon._progressTrack.get_width();
+                if (trackWidth > 0) {
+                    targetIcon._progressFill.set_width(trackWidth * percent);
+                }
+            } else {
+                targetIcon._progressFill.set_width(0);
+            }
+        };
+
+        Mainloop.idle_add(() => {
+            updateProgressBar(position);
+            return GLib.SOURCE_REMOVE;
+        });
+
+        if (isPlaying && length > 0) {
+            let simulatedPosition = position;
+            this._progressTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                simulatedPosition += 1000000;
+                updateProgressBar(simulatedPosition);
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
+    }
+
+    _collapseAppIcon(cleanAppName) {
+        let children = this.container.get_children();
+
+        if (this._progressTimerId) {
+            GLib.Source.remove(this._progressTimerId);
+            this._progressTimerId = null;
+        }
+
+        for (let child of children) {
+            if (child._appId) {
+                let dockAppId = child._appId.toLowerCase();
+                
+                if (dockAppId.includes(cleanAppName) || cleanAppName.includes(dockAppId.replace('.desktop', ''))) {
+                    
+                    if (child._mediaBox && child._mediaBox.visible) {
+                        child._mediaBox.ease({
+                            opacity: 0,
+                            duration: 200,
+                            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                            onComplete: () => {
+                                child._mediaBox.hide(); 
+                                child.remove_style_class_name('media-active-capsule');
+                                
+                                if (child._isTempMediaIcon) {
+                                    child.destroy();
+                                }
+
+                                let appState = Shell.AppSystem.get_default().lookup_app(child._appId)?.get_state();
+
+                                if (!child._isPinned && appState !== Shell.AppState.RUNNING) {
+                                    child.destroy();
+                                    this._updateSeparatorVisibility();
+                                }
+                            }
+                        });
+                    } else if (child._isTempMediaIcon) {
+                        child.destroy();
+                    }
+                }
+            }
+        }
+    }
+
+    _updateAppDots(icon, desktopFile) {
+        try {
+            if (!icon || !icon._dotContainer) return;
+            icon._dotContainer.destroy_all_children();
+            
+            const Shell = imports.gi.Shell;
+            let app = Shell.AppSystem.get_default().lookup_app(desktopFile);
+            
+            if (app && app.get_state() === Shell.AppState.RUNNING) {
+                let windows = app.get_windows().filter(w => !w.is_skip_taskbar());
+                let windowCount = windows.length;
+                
+                let displayCount = Math.min(windowCount, 4); 
+                
+                for (let i = 0; i < displayCount; i++) {
+                    let dot = new St.Widget({ style_class: 'app-dot' });
+                    icon._dotContainer.add_child(dot);
+                }
+                
+                if (windowCount > 4) {
+                    let plus = new St.Label({ 
+                        text: '+', 
+                        style: 'font-size: 8px; font-weight: bold; margin-left: 1px; color: white;' 
+                    });
+                    icon._dotContainer.add_child(plus);
+                }
+            }
+        } catch (e) {
+
         }
     }
 
     _removeApp(desktopFile, iconButton) {
-    let apps = this.settings.get_strv('dock-apps') || [];
-    apps = apps.filter(a => a !== desktopFile);
-    this.settings.set_strv('dock-apps', apps);
+        let apps = this.settings.get_strv('dock-apps') || [];
+        apps = apps.filter(a => a !== desktopFile);
+        this.settings.set_strv('dock-apps', apps);
 
-    if (iconButton && iconButton.get_parent && iconButton.get_parent()) {
-        try {
-            iconButton.destroy();
-        } catch (e) {
-            log('Erreur en détruisant l\'icône : ' + e);
-        }
-    } else {
-        let children = this.container.get_children();
-        for (let child of children) {
+        if (iconButton && iconButton.get_parent && iconButton.get_parent()) {
+            try {
+                const Shell = imports.gi.Shell;
+                let appState = Shell.AppSystem.get_default().lookup_app(desktopFile)?.get_state();
+                iconButton.destroy();
+
+                if (appState === Shell.AppState.RUNNING) {
+                    this.addAppIcon(desktopFile, false);
+                }
+                this._updateSeparatorVisibility();
+            } catch (e) {
+                log('Erreur en détruisant l\'icône : ' + e);
+            }
+        } else {
+            let children = this.container.get_children();
+            for (let child of children) {
+            }
         }
     }
-}
 
     _showWindowList(appInfo, iconActor) {
         if (this.windowListPopup) {
@@ -568,7 +1192,7 @@ class MyDock {
                 x_expand: true
             });
 
-            row.connect('button-press-event', () => {
+            row.connect('clicked', () => {
                 try { w.activate(global.get_current_time()); } catch (e) {}
                 this._hideWindowList();
             });
@@ -585,7 +1209,7 @@ class MyDock {
             });
             closeBtn.set_child(closeIcon);
 
-            closeBtn.connect('button-press-event', () => {
+            closeBtn.connect('clicked', () => {
                 try {
                     if (w.delete) w.delete(global.get_current_time());
                     else if (w.request_close) w.request_close();
@@ -752,6 +1376,17 @@ class MyDock {
     
     if (this.container) {
         this.container.destroy();
+    }
+
+    if (this._nameOwnerChangedId) {
+        let bus = Gio.bus_get_sync(Gio.BusType.SESSION, null);
+        bus.signal_unsubscribe(this._nameOwnerChangedId);
+        this._nameOwnerChangedId = 0;
+    }
+
+    if (this._appStateChangedId && this._appSystem) {
+        this._appSystem.disconnect(this._appStateChangedId);
+        this._appStateChangedId = 0;
     }
 }
 }
@@ -1429,7 +2064,7 @@ async _accessibilityMenu() {
     
             button.set_child(icon);
     
-            button.connect('button-press-event', () => {
+            button.connect('clicked', () => {
                 let currentState = this._getSetting(setting.schema, setting.key);
                 let newState = !currentState;
                 this._setSetting(setting.schema, setting.key, newState);
@@ -1696,7 +2331,37 @@ _handleBarClick() {
         return false;
     });
 
-    global.stage.connect('button-press-event', () => menunet.destroy());
+    let stageEventId = global.stage.connect('captured-event', (stage, event) => {
+        let type = event.type();
+        
+        if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+            let target = event.get_source();
+            
+            try {
+                if (menunet && (menunet === target || menunet.contains(target))) {
+                    return Clutter.EVENT_PROPAGATE; 
+                }
+                
+                if (menunet) {
+                    menunet.destroy();
+                    menunet = null;
+                }
+            } catch (e) {
+
+                menunet = null;
+            }
+        }
+        return Clutter.EVENT_PROPAGATE;
+    });
+
+
+    menunet.connect('destroy', () => {
+        if (stageEventId) {
+            global.stage.disconnect(stageEventId);
+            stageEventId = 0;
+        }
+    });
+
     return menunet;
 }
 
@@ -1722,8 +2387,9 @@ _handleBarClick() {
 
 var AboutDialog = GObject.registerClass(
     class AboutDialog extends ModalDialog.ModalDialog {
-        _init() {
+        _init(updater) {
             super._init({ styleClass: 'prism-about-dialog', destroyOnClose: true });
+            this._updater = updater;
             let contentBox = this.contentLayout;
             contentBox.style_class = 'prism-about-content';
             contentBox.vertical = true;
@@ -1735,233 +2401,148 @@ var AboutDialog = GObject.registerClass(
             contentBox.add_child(version);
             this.statusLabel = new St.Label({ text: "", style: "color: #aaa; font-size: 12px; padding-top: 10px; text-align: center;", x_align: Clutter.ActorAlign.CENTER, visible: false });
             contentBox.add_child(this.statusLabel);
-            this._updateBtn = this.addButton({ label: 'Rechercher une mise à jour', action: () => this._onUpdateClicked() });
+            this._updateBtn = this.addButton({ label: 'Rechercher une mise à jour', action: () => this._updater.runUpdateProcess() });
             this.addButton({ label: 'Fermer', action: () => this.close(), key: Clutter.KEY_Escape });
-        }
-
-        _onUpdateClicked() {
-            let button = this._updateBtn;
-            if (button) { button.reactive = false; button.set_label("Vérification..."); }
-            this.statusLabel.text = "Connexion au serveur...";
-            this.statusLabel.show();
-            this.statusLabel.style = "color: #aaa;";
-            
-            let updater = new UpdateManager();
-
-            updater.checkUpdates().then((isUpdateAvailable) => {
-                if (isUpdateAvailable) {
-                    if (button) button.set_label("Téléchargement...");
-                    this.statusLabel.text = "Mise à jour trouvée ! Téléchargement...";
-                    
-                    updater.updateAll().then(() => {
-                        if (button) button.set_label("Redémarrage requis");
-                        this.statusLabel.style = "color: #4CAF50; font-weight: bold;";
-                        this.statusLabel.text = "Mise à jour installée ! Déconnexion dans 5 sec...";
-                        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
-                            GLib.spawn_command_line_async('gnome-session-quit --logout --no-prompt');
-                            return GLib.SOURCE_REMOVE;
-                        });
-                    });
-                } else {
-                    if (button) {
-                        button.reactive = true;
-                        button.set_label("Rechercher une mise à jour");
-                    }
-                    this.statusLabel.style = "color: #4CAF50; font-weight: bold;";
-                    this.statusLabel.text = "IUI est déjà à jour.";
-                }
-            }).catch((e) => {
-                if (button) { button.reactive = true; button.set_label("Réessayer"); }
-                this.statusLabel.style = "color: #FF5252; font-weight: bold;";
-                this.statusLabel.text = "Erreur: " + e.message;
-                log("Erreur update: " + e);
-            });
         }
     }
 );
 
 const UpdateManager = class {
-    constructor() {
+    constructor(extensionScope) {
+        this._scope = extensionScope; // Pour accéder au dock ou au menu
         this.baseUrl = "https://projet-prism.fr/update/iui/last/";
-        this.filesToUpdate = [
-            "extension.js",
-            "intelligentsearchbar.js",
-            "notificationsys.js",
-            "time.js",
-            "stylesheet.css",
-            "schemas/gschemas.compiled",
-            "metadata.json",
-            "clipboard.js"
-        ];
-        if (typeof Soup.Session.new === 'function') {
-            this._session = new Soup.Session(); 
-        } else {
-            this._session = new Soup.SessionAsync(); 
-        }
+        this.tempDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'prism-update']);
+        this.filesToUpdate = ["desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", "time.js", "stylesheet.css", "clipboard.js", "extension.js", "metadata.json"];
+        this._session = new Soup.Session();
     }
 
-    async ensureIntegrity() {
-        let missingFiles = false;
-
-        for (let filename of this.filesToUpdate) {
-            let localPath = GLib.build_filenamev([Me.dir.get_path(), filename]);
-            let file = Gio.File.new_for_path(localPath);
-            
-            if (!file.query_exists(null)) {
-                missingFiles = true;
-                break;
-            }
+    async _downloadFile(filename) {
+        // SÉCURITÉ : On s'assure que le dossier existe chaque fois qu'on télécharge un fichier
+        if (!GLib.file_test(this.tempDir, GLib.FileTest.EXISTS)) {
+            GLib.mkdir_with_parents(this.tempDir, 0o755);
         }
 
-        if (!missingFiles) return;
+        let remoteUrl = this.baseUrl + filename;
+        let localPath = GLib.build_filenamev([this.tempDir, filename]);
+        let file = Gio.File.new_for_path(localPath);
+        let message = Soup.Message.new('GET', remoteUrl);
 
-        let monitor = Gio.NetworkMonitor.get_default();
-        if (!monitor.network_available) return;
-
-        let userAccepted = await this._askUserToDownload();
-
-        if (userAccepted) {
-            try {
-                await this.updateAll();
-                Main.notify("PrismUI", "Fichiers manquants téléchargés avec succès.");
-            } catch (e) {
-                log(e.message);
-            }
-        } else {
-            const syslogo = "preferences-system"
-            notificationManager.showNotification("IUI - Oh Oh !", "Votre installation est corrompu !", "Gestionnaire des mises à jour", syslogo);
-        }
-    }
-
-    _askUserToDownload() {
-        return new Promise((resolve) => {
-            let dialog = new ModalDialog.ModalDialog({
-                styleClass: 'prompt-dialog',
-                destroyOnClose: true
-            });
-
-            let content = new St.BoxLayout({name: 'dwn-updt', vertical: true });
-            
-            let title = new St.Label({ 
-                text: "Fichiers système manquants", 
-                style_class: 'prompt-dialog-headline' 
-            });
-            let body = new St.Label({ 
-                text: "Certains fichiers essentiels de PrismUI sont manquants. Voulez-vous les télécharger et réparer l'extension maintenant ? (Internet requis)",
-                style_class: 'prompt-dialog-description' 
-            });
-
-            content.add_child(title);
-            content.add_child(body);
-            dialog.contentLayout.add_child(content);
-
-            dialog.addButton({
-                label: "Annuler",
-                action: () => {
-                    dialog.close();
-                    resolve(false);
-                },
-                key: Clutter.KEY_Escape
-            });
-
-            dialog.addButton({
-                label: "Télécharger et Réparer",
-                action: () => {
-                    dialog.close();
-                    resolve(true);
-                },
-                default: true
-            });
-
-            dialog.open();
-        });
-    }
-
-    checkUpdates() {
         return new Promise((resolve, reject) => {
-            let remoteUrl = this.baseUrl + "metadata.json";
-            let message = Soup.Message.new('GET', remoteUrl);
-
-            const onResponse = (bytes) => {
+            this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
                 try {
-                    let jsonContent = new TextDecoder().decode(bytes);
-                    let remoteMetadata = JSON.parse(jsonContent);
+                    let bytes = session.send_and_read_finish(res);
+                    if (message.status_code !== 200) throw new Error("Status " + message.status_code);
                     
-                    let currentVersion = parseFloat(Me.metadata.version);
-                    let remoteVersion = parseFloat(remoteMetadata.version);
-
-                    if (remoteVersion > currentVersion) {
-                        resolve(true);
-                    } else {
-                        resolve(false);
-                    }
-                } catch (e) {
-                    reject(new Error(e.message));
-                }
-            };
-
-            if (this._session.send_and_read_async) {
-                this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
-                    try {
-                        let bytes = session.send_and_read_finish(res);
-                        if (message.status_code !== 200) { reject(new Error(`${message.status_code}`)); return; }
-                        onResponse(bytes.get_data());
-                    } catch (e) { reject(e); }
-                });
-            } else {
-                this._session.queue_message(message, (session, msg) => {
-                    if (msg.status_code !== 200) { reject(new Error(`${msg.status_code}`)); return; }
-                    let body = msg.response_body.data; 
-                    onResponse(body);
-                });
-            }
-        });
-    }
-
-    _downloadFile(filename) {
-        return new Promise((resolve, reject) => {
-            let remoteUrl = this.baseUrl + filename;
-            let localPath = GLib.build_filenamev([Me.dir.get_path(), filename]);
-            let file = Gio.File.new_for_path(localPath);
-            let message = Soup.Message.new('GET', remoteUrl);
-
-            let parent = file.get_parent();
-            if (parent && !parent.query_exists(null)) {
-                try {
-                    parent.make_directory_with_parents(null);
-                } catch (e) {}
-            }
-
-            const writeToFile = (bytes) => {
-                file.replace_contents_async(bytes, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null, (f, r) => {
-                    try {
-                        f.replace_contents_finish(r);
-                        resolve(file.get_basename());
-                    } catch (err) { reject(err); }
-                });
-            };
-
-            if (this._session.send_and_read_async) {
-                this._session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, res) => {
-                    try {
-                        let bytes = session.send_and_read_finish(res);
-                        if (message.status_code !== 200) { reject(new Error(`${message.status_code}`)); return; }
-                        writeToFile(bytes);
-                    } catch (e) { reject(e); }
-                });
-            } else {
-                this._session.queue_message(message, (session, msg) => {
-                    if (msg.status_code !== 200) { reject(new Error(`${msg.status_code}`)); return; }
-                    writeToFile(msg.response_body.flatten());
-                });
-            }
+                    file.replace_contents(bytes.get_data(), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+                    resolve(localPath);
+                } catch (e) { reject(e); }
+            });
         });
     }
 
     async updateAll() {
-        let promises = [];
-        for (let file of this.filesToUpdate) { promises.push(this._downloadFile(file)); }
-        await Promise.all(promises);
+        try {
+            // 1. S'assurer que le répertoire de travail est propre et présent
+            if (GLib.file_test(this.tempDir, GLib.FileTest.EXISTS)) {
+                let cacheDir = Gio.File.new_for_path(this.tempDir);
+                cacheDir.delete(null);
+            }
+            GLib.mkdir_with_parents(this.tempDir, 0o755);
+
+            // 2. Téléchargement
+            await Promise.all(this.filesToUpdate.map(f => this._downloadFile(f)));
+
+            // 3. SWAP ATOMIQUE
+            for (let filename of this.filesToUpdate) {
+                let tempFile = Gio.File.new_for_path(GLib.build_filenamev([this.tempDir, filename]));
+                let destFile = Gio.File.new_for_path(GLib.build_filenamev([Me.dir.get_path(), filename]));
+                
+                // Vérification supplémentaire avant de déplacer
+                if (tempFile.query_exists(null)) {
+                    tempFile.move(destFile, Gio.FileCopyFlags.OVERWRITE, null, null);
+                }
+            }
+            
+            // 4. Cleanup
+            let cacheDir = Gio.File.new_for_path(this.tempDir);
+            cacheDir.delete(null);
+            
+        } catch (e) {
+            log("Échec de la mise à jour atomique : " + e.message);
+            throw e;
+        }
+    }
+
+    async runUpdateProcess() {
+        Main.notify("Prism Update", "Téléchargement des mises à jour...");
+
+        try {
+            await this.updateAll();
+            
+            let dialog = new ModalDialog.ModalDialog();
+            dialog.contentLayout.add(new St.Label({ 
+                text: "Mise à jour terminée avec succès.\nLa session va maintenant se fermer pour appliquer les changements." 
+            }));
+            
+            dialog.addButton({ 
+                label: "Redémarrer la session", 
+                action: () => {
+                    dialog.close();
+                    GLib.spawn_command_line_async('gnome-session-quit --logout --no-prompt');
+                }
+            });
+            
+            dialog.open();
+
+        } catch (e) {
+            log("Échec de la mise à jour : " + e.message);
+            Main.notify("Erreur Prism", "La mise à jour a échoué. Vérifiez votre connexion.");
+        }
+    }
+
+    ensureIntegrity() {
+        let extensionPath = Me.dir.get_path();
+        let missingFiles = this.filesToUpdate.filter(filename => {
+            let file = Gio.File.new_for_path(GLib.build_filenamev([extensionPath, filename]));
+            // Si le fichier n'existe pas ou est vide, il est considéré comme manquant
+            return !file.query_exists(null) || file.query_info('standard::size', Gio.FileQueryInfoFlags.NONE, null).get_size() === 0;
+        });
+
+        if (missingFiles.length > 0) {
+            log(`[PrismUI] Intégrité compromise, fichiers manquants : ${missingFiles.join(', ')}`);
+            
+            // On force le téléchargement immédiatement et de manière synchrone 
+            // pour éviter que le reste de l'extension ne s'initialise sur des bases vides.
+            this._repairSystem(missingFiles);
+            return false;
+        }
+        return true;
+    }
+
+    async _repairSystem(files) {
+        Main.notify("PrismUI - Réparation en cours", "Fichiers manquants détectés, téléchargement sécurisé...");
+        
+        try {
+            // On attend que TOUS les téléchargements soient terminés avec succès
+            await Promise.all(files.map(async (filename) => {
+                await this._downloadFile(filename);
+                let tempFile = Gio.File.new_for_path(GLib.build_filenamev([this.tempDir, filename]));
+                let destFile = Gio.File.new_for_path(GLib.build_filenamev([Me.dir.get_path(), filename]));
+                tempFile.move(destFile, Gio.FileCopyFlags.OVERWRITE, null, null);
+            }));
+
+            // ON NE REDÉMARRE QUE SI LE TRY A RÉUSSI (pas d'erreur réseau)
+            Main.notify("PrismUI - Réparation terminée", "Le système va maintenant redémarrer pour appliquer les correctifs.");
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+                GLib.spawn_command_line_async('gnome-session-quit --logout --no-prompt');
+                return GLib.SOURCE_REMOVE;
+            });
+            
+        } catch (e) {
+            // SI ÉCHEC : On notifie mais ON NE REDÉMARRE PAS pour éviter le bootloop
+            log("[PrismUI] Échec critique de la réparation : " + e.message);
+            Main.notify("PrismUI - Mode dégradé", "Échec du téléchargement. L'interface IUI restera désactivée.");
+        }
     }
 };
 
@@ -2003,7 +2584,7 @@ class CustomPopup {
         box.add_child(label);
         button.set_child(box);
 
-        button.connect('button-press-event', () => {
+        button.connect('clicked', () => {
             this.destroy(); 
             if (callback) callback();
             return Clutter.EVENT_STOP;
@@ -2052,15 +2633,16 @@ class CustomPopup {
         Mainloop.timeout_add(100, () => {
             if (!this.actor) return GLib.SOURCE_REMOVE;
 
-            this._globalEvent = global.stage.connect('button-press-event', (actor, event) => {
-
-                if (!this.actor) return Clutter.EVENT_PROPAGATE;
-
-                let target = event.get_source();
+            this._globalEvent = global.stage.connect('captured-event', (stage, event) => {
+                let type = event.type();
                 
-                let insideMenu = this.actor.contains(target) || this.actor === target;
+                if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+                    let target = event.get_source();
+                    
+                    if (this.actor && (this.actor === target || this.actor.contains(target))) {
+                        return Clutter.EVENT_PROPAGATE;
+                    }
 
-                if (!insideMenu) {
                     this.destroy();
                 }
 
@@ -2186,18 +2768,13 @@ class HomeBar {
         this._singleClickTimeoutId = 0;
         this._lastClickTime = 0;
 
-        this.actor.connect('button-press-event', (actor, event) => {
-            pressY = event.get_coords()[1];
-            return Clutter.EVENT_PROPAGATE;
-        });
+        this.actor.reactive = true;
 
-        this.actor.connect('button-release-event', (actor, event) => {
-            let releaseY = event.get_coords()[1];
-            
+        const handleRelease = (releaseY) => {
             if (pressY - releaseY > 10) { 
                 this._lastClickTime = 0;
                 this._minimizeAll();
-                return Clutter.EVENT_PROPAGATE;
+                return;
             } 
 
             let now = Date.now();
@@ -2220,7 +2797,29 @@ class HomeBar {
                     return GLib.SOURCE_REMOVE;
                 });
             }
+        };
 
+        this.actor.connect('button-press-event', (actor, event) => {
+            pressY = event.get_coords()[1];
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        this.actor.connect('button-release-event', (actor, event) => {
+            handleRelease(event.get_coords()[1]);
+            return Clutter.EVENT_PROPAGATE;
+        });
+
+        this.actor.connect('touch-event', (actor, event) => {
+            let type = event.type();
+
+            if (type === Clutter.EventType.TOUCH_BEGIN) {
+                pressY = event.get_coords()[1];
+            } 
+
+            else if (type === Clutter.EventType.TOUCH_END) {
+                handleRelease(event.get_coords()[1]);
+            }
+            
             return Clutter.EVENT_PROPAGATE;
         });
     }
@@ -2263,12 +2862,36 @@ class HomeBar {
 function init() {
 }
 
+function reloadExtension() {
+    disable();
+    enable();
+}
+
 function enable() {
+    let integrityManager = new UpdateManager(this);
+    if (!integrityManager.ensureIntegrity()) {
+        // Si l'intégrité échoue, on arrête le enable() ici pour ne pas charger de code corrompu
+        return; 
+    }
+
+    try {
+        NotificationManager = Me.imports.notificationsys.NotificationManager;
+        AppLauncher = Me.imports.intelligentsearchbar.AppLauncher;
+        TimeMachine = Me.imports.time.TimeMachine;
+        PrismWidgets = Me.imports.desktopWidgets.PrismWidgets;
+        Clipboard = Me.imports.clipboard;
+    } catch {
+        let integrityManager = new UpdateManager(this);
+        integrityManager.ensureIntegrity();
+        return;
+    }
+
     if (!global.networkSetting) global.networkSetting = new NetworkSetting();
     if (!global.myDock) global.myDock = new MyDock();
     if (!global._timeMachine) global._timeMachine = new TimeMachine();
     if (!global.appLauncher) global.appLauncher = new AppLauncher();
     if (!notificationManager) notificationManager = new NotificationManager();
+    if (!global.prismWidgets) global.prismWidgets = new PrismWidgets();
 
     const syslogo = "preferences-system"
     //[DEBUG]notificationManager.showNotification("IUI - Démarrage réussi", "Vous pouvez maintenant accéder à toutes les fonctionnalités de Prism.", "Système", syslogo);
@@ -2280,9 +2903,6 @@ function enable() {
     Main.panel.hide();
 
     global.clipboardManager = new Clipboard.ClipboardManager();
-
-    let integrityManager = new UpdateManager();
-    integrityManager.ensureIntegrity();
 
     closeOverviewTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
         if (Main.overview.visible) {
@@ -2296,6 +2916,15 @@ function enable() {
 
 function disable() {
     if (global.myDock) {
+        if (global.myDock._nameOwnerChangedId) {
+            let bus = Gio.bus_get_sync(Gio.BusType.SESSION, null);
+            bus.signal_unsubscribe(global.myDock._nameOwnerChangedId);
+            global.myDock._nameOwnerChangedId = 0;
+        }
+        if (global.myDock._mediaProxy && global.myDock._mediaSignalId) {
+            global.myDock._mediaProxy.disconnect(global.myDock._mediaSignalId);
+            global.myDock._mediaProxy = null;
+        }
         global.myDock.destroy(); 
         global.myDock = null;
     }
@@ -2323,6 +2952,16 @@ function disable() {
     if (homeBar) {
         homeBar.destroy();
         homeBar = null;
+    }
+
+    if (global.prismWidgets) {
+        global.prismWidgets.destroy();
+        global.prismWidgets = null;
+    }
+
+    if (this._mediaProxy && this._mediaSignalId) {
+        this._mediaProxy.disconnect(this._mediaSignalId);
+        this._mediaProxy = null;
     }
 
     Main.panel.show();

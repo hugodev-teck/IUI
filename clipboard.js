@@ -115,7 +115,7 @@ var ClipboardManager = class ClipboardManager {
         
         this.isOpen = true;
 
-        this.clickBinder = global.stage.connect('button-press-event', (actor, event) => {
+        this.clickBinder = global.stage.connect('clicked', (actor, event) => {
             let target = event.get_source();
             let isClickOnButton = (anchorButton && (target === anchorButton || anchorButton.contains(target)));
             

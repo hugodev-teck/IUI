@@ -139,32 +139,32 @@
 
 .header-wifi {
     padding: 10px;
-    background-color: #242424;
-    border-bottom: 1px solid #ccc;
+    background-color: #383838;
+    color: #ccc;
     display: flex;
     border-radius: 14px;
     justify-content: space-between;
 }
 .header-bluetooth {
     padding: 10px;
-    background-color: #242424;
-    border-bottom: 1px solid #ccc;
+    background-color: #383838;
+    color: #ccc;
     display: flex;
     border-radius: 14px;
     justify-content: space-between;
 }
 .header-accessibility {
     padding: 10px;
-    background-color: #242424;
-    border-bottom: 1px solid #ccc;
+    background-color: #383838;
+    color: #ccc;
     display: flex;
     border-radius: 14px;
     justify-content: space-between;
 }
 .header-volume {
     padding: 10px;
-    background-color: #f0f0f0;
-    border-bottom: 1px solid #ccc;
+    background-color: #383838;
+    color: #ccc;
     display: flex;
     border-radius: 14px;
     justify-content: space-between;
@@ -174,7 +174,7 @@
     font-size: 16px;
     font-weight: bold;
     font-family: sans-serif;
-    margin-top: 13px;
+    margin-top: 9px;
 }
 .label-title-2 {
     font-size: 16px;
@@ -1111,15 +1111,6 @@
     color: #ff5555;
 }
 
-.app-running-dot {
-    width: 4px;
-    height: 4px;
-    background-color: white;
-    border-radius: 2px;
-    margin-bottom: 2px;
-    box-shadow: 0 0 2px rgba(0,0,0,0.8);
-}
-
 .prism-home-bar {
     background-color: rgba(216, 216, 216, 0.4);
     border-radius: 10px;
@@ -1129,4 +1120,128 @@
 .prism-home-bar:hover {
     background-color: rgba(131, 131, 131, 0.8);
     width: 220px; 
+}
+
+.media-dock-widget {
+    background-color: rgba(75, 75, 75, 0.8);
+    border-radius: 10px;
+    padding: 5px 10px;
+    margin: 0 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.media-active-capsule {
+    background-color: rgba(233, 233, 233, 0.049) !important;
+    border-radius: 7px !important;
+    padding: 2px 16px 2px 6px !important;
+    transition-duration: 200ms;
+}
+
+.media-dock-box {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+.media-progress-bar {
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+}
+
+.media-progress-fill {
+    background-color: #ffffff;
+    border-radius: 2px;
+}
+
+.media-control-btn {
+    border-radius: 50%;
+    padding: 6px;
+    color: #dddddd;
+    transition-duration: 150ms;
+}
+
+.media-control-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.media-play-btn {
+    color: #ffffff;
+    padding: 8px;
+    margin: 0 4px;
+}
+
+.app-dot-container {
+    margin-top: 2px;
+}
+
+.app-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.8);
+    margin: 0 2px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+.prism-widget-box {
+    background-color: rgba(179, 179, 179, 0.26);
+    border-radius: 24px;
+    padding: 20px;
+    position: absolute; 
+}
+
+.prism-widget-df-meteo-box {
+    background-color: rgba(0, 145, 255, 0.26);
+    border-radius: 24px;
+    padding: 20px;
+    position: absolute; 
+}
+
+.prism-widget-menu {
+    background-color: rgba(0, 0, 0, 0.6);
+    border-radius: 30px;
+    padding: 10px;
+}
+
+.prism-widget-menu-btn {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-weight: bold;
+    border-radius: 20px;
+    padding: 15px 30px;
+    margin: 0 5px;
+    transition-duration: 150ms;
+}
+
+.prism-widget-menu-btn:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.prism-widget-ghost-box {
+    background-color: rgba(255, 255, 255, 0.15);
+    border: 3px dashed rgba(255, 255, 255, 0.8);
+    border-radius: 24px;
+}
+
+.prism-widget-editing {
+    border: 2px dashed rgba(255, 255, 255, 0.6);
+}
+
+.prism-widget-delete-btn {
+    background-color: #ff5555;
+    color: white;
+    font-weight: bold;
+    font-size: 14px;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    text-align: center;
+    transition-duration: 100ms;
+}
+
+.prism-widget-delete-btn:hover {
+    background-color: #ff2222;
+    transform: scale(1.1);
 }
