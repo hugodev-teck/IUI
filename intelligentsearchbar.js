@@ -332,11 +332,6 @@ var AppLauncher = GObject.registerClass(
                 .sort((a, b) => a.get_display_name().localeCompare(b.get_display_name()));
 
             this._showAppGrid();
-
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
-                this.searchEntry.grab_key_focus();
-                return GLib.SOURCE_REMOVE;
-            });
         }
 
         _onSearchChanged() {

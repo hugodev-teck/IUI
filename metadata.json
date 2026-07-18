@@ -5,6 +5,6 @@
   "shell-version": [ "43.9" ],
   "url": "prism-project-id.web.app",
   "permissions": ["org.gnome.shell"],
-  "version": "1.35",
+  "version": "1.36",
   "realease": "L999999"
 }

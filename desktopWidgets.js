@@ -102,8 +102,8 @@ const BUILTIN_WIDGETS = [
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
                 { type: 'label', text: 'Batterie', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 8px;' },
-                { type: 'label', id: 'bat-text', text: 'Calcul...', style: 'font-size: 32px; font-weight: bold; color: #4CAF50;' },
-                { type: 'label', id: 'bat-status', text: 'Mise à jour...', style: 'font-size: 12px; color: #aaa;' }
+                { type: 'label', id: 'bat-text', text: 'Calcul...', style: 'font-size: 32px; font-weight: bold; color: #1ece24;' },
+                { type: 'label', id: 'bat-status', text: 'Mise à jour...', style: 'font-size: 12px; color: #ffffff;' }
             ]
         },
         bindings: [
@@ -210,8 +210,8 @@ const BUILTIN_WIDGETS = [
             children: [
                 { type: 'label', text: 'Crypto (EUR)', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px;' },
                 // Police monospace pour que les chiffres soient bien alignés
-                { type: 'label', id: 'btc-price', text: 'BTC : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #F7931A; font-family: monospace; margin-bottom: 4px;' },
-                { type: 'label', id: 'eth-price', text: 'ETH : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #627EEA; font-family: monospace;' }
+                { type: 'label', id: 'btc-price', text: 'BTC : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace; margin-bottom: 4px;' },
+                { type: 'label', id: 'eth-price', text: 'ETH : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace;' }
             ]
         },
         bindings: [
@@ -249,8 +249,8 @@ const BUILTIN_WIDGETS = [
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
                 { type: 'label', text: 'Taux de change', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px;' },
-                { type: 'label', id: 'eur-usd', text: '1 € = --- $', style: 'font-size: 16px; font-weight: bold; color: #81C784; font-family: monospace; margin-bottom: 4px;' },
-                { type: 'label', id: 'eur-chf', text: '1 € = --- CHF', style: 'font-size: 16px; font-weight: bold; color: #E57373; font-family: monospace;' }
+                { type: 'label', id: 'eur-usd', text: '1 € = --- $', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace; margin-bottom: 4px;' },
+                { type: 'label', id: 'eur-chf', text: '1 € = --- CHF', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace;' }
             ]
         },
         bindings: [
@@ -287,8 +287,8 @@ const BUILTIN_WIDGETS = [
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
                 { type: 'label', text: 'État du Réseau', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 8px;' },
-                { type: 'label', id: 'public-ip', text: 'IP : Recherche...', style: 'font-size: 14px; color: #4DD0E1; font-family: monospace; margin-bottom: 5px;' },
-                { type: 'label', id: 'net-status', text: 'Ping: ---', style: 'font-size: 14px; color: #aaa; font-family: monospace;' }
+                { type: 'label', id: 'public-ip', text: 'IP : Recherche...', style: 'font-weight: bold; font-size: 14px; color: #4DD0E1; font-family: monospace; margin-bottom: 5px;' },
+                { type: 'label', id: 'net-status', text: 'Ping: ---', style: 'font-size: 14px; color: #ffffff; font-family: monospace;' }
             ]
         },
         bindings: [
@@ -301,6 +301,55 @@ const BUILTIN_WIDGETS = [
                     try { 
                         return 'IP : ' + JSON.parse(data).ip; 
                     } catch(e) { return 'IP : Hors ligne'; }
+                `
+            }
+        ]
+    },
+    {
+        id: "cpu-temp-widget",
+        name: "Température CPU",
+        gridW: 3, gridH: 3,
+        ui: {
+            type: 'box', vertical: true, style_class: 'prism-widget-box',
+            children: [
+                { type: 'label', text: 'Système', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 8px;' },
+                { type: 'label', id: 'temp-text', text: 'Calcul...', style: 'font-size: 32px; font-weight: bold; color: #ff9800;' },
+                { type: 'label', id: 'temp-status', text: 'Mise à jour...', style: 'font-size: 12px; color: #ffffff;' }
+            ]
+        },
+        bindings: [
+            {
+                targetId: "temp-text", targetProp: "text", interval: 5,
+                sourceType: "file", source: "/sys/class/thermal/thermal_zone0/temp",
+                process: `
+                    try {
+                        let tempC = (parseInt(data) / 1000).toFixed(1);
+                        return tempC + ' °C';
+                    } catch(e) { return 'Erreur'; }
+                `
+            },
+            {
+                targetId: "temp-status", targetProp: "text", interval: 5,
+                sourceType: "file", source: "/sys/class/thermal/thermal_zone0/temp",
+                process: `
+                    try {
+                        let t = parseInt(data) / 1000;
+                        if (t >= 75) return 'Surchauffe !';
+                        if (t >= 60) return 'Chaud';
+                        return 'Normal';
+                    } catch(e) { return '--'; }
+                `
+            },
+            {
+                targetId: "temp-text", targetProp: "style", interval: 5,
+                sourceType: "file", source: "/sys/class/thermal/thermal_zone0/temp",
+                process: `
+                    try {
+                        let t = parseInt(data) / 1000;
+                        if (t >= 75) return 'font-size: 32px; font-weight: bold; color: #ff5555;'; // Rouge
+                        if (t >= 60) return 'font-size: 32px; font-weight: bold; color: #ffaa00;'; // Orange
+                        return 'font-size: 32px; font-weight: bold; color: #4CAF50;'; // Vert
+                    } catch(e) { return 'font-size: 32px; font-weight: bold; color: #aaa;'; }
                 `
             }
         ]
