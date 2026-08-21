@@ -53,8 +53,17 @@ const PRISM_APPS = {
                 ? `Desktools-${version}-arm64.AppImage` 
                 : `Desktools-${version}.AppImage`;
         }
+    },
+    'Velora explorer': {
+        name: "Velora Explorer",
+        autor: "PRISM",
+        version: "0.1.0",
+        tag: "V0.1.0",
+        repo: "hugodev-teck/Velora-explorer",
+        icon: "vlogo.png",
+        desktopId: "velora-explorer",
+        getFileName: () => "explorer.js"
     }
-    // Tu pourras ajouter 'prism-notes', 'prism-calc' ici plus tard !
 };
 
 let NotificationManager, AppLauncher, TimeMachine, PrismWidgets, Clipboard;
@@ -1585,7 +1594,6 @@ class MyDock {
                     Gio.File.new_for_path(filePath).delete(null);
                     // Rafraîchir l'interface visuelle après suppression
                     this.storeDialog.close();
-                    this._openPrismStore();
                 });
                 btnBox.add_child(removeBtn);
             } else {
@@ -2766,7 +2774,7 @@ const UpdateManager = class {
         this._scope = extensionScope; // Pour accéder au dock ou au menu
         this.baseUrl = "https://projet-prism.fr/update/iui/last/";
         this.tempDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'prism-update']);
-        this.filesToUpdate = ["desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", "time.js", "stylesheet.css", "clipboard.js", "extension.js", "metadata.json"];
+        this.filesToUpdate = ["desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", "time.js", "stylesheet.css", "clipboard.js", "extension.js", "metadata.json", "icons/vlogo.png"];
         this._session = new Soup.Session();
     }
 
@@ -2779,6 +2787,10 @@ const UpdateManager = class {
         let remoteUrl = this.baseUrl + filename;
         let localPath = GLib.build_filenamev([this.tempDir, filename]);
         let file = Gio.File.new_for_path(localPath);
+        let parentDir = file.get_parent();
+        if (parentDir && !parentDir.query_exists(null)) {
+            parentDir.make_directory_with_parents(null);
+        }
         let message = Soup.Message.new('GET', remoteUrl);
 
         return new Promise((resolve, reject) => {
@@ -3234,10 +3246,22 @@ function _launchOrDownloadApp(appId) {
     let appImagePath = GLib.build_filenamev([programDir, fileName]);
     
     let file = Gio.File.new_for_path(appImagePath);
+    let isJavaScript = fileName.toLowerCase().endsWith('.js');
+    let launchCommand = isJavaScript
+        ? `gjs "${appImagePath}"`
+        : `"${appImagePath}"`;
 
     // Lancement direct si déjà installé
     if (file.query_exists(null)) {
-        GLib.spawn_command_line_async(`"${appImagePath}"`);
+        try {
+            if (isJavaScript) {
+                Gio.Subprocess.new(['gjs', appImagePath], Gio.SubprocessFlags.NONE);
+            } else {
+                Gio.Subprocess.new([appImagePath], Gio.SubprocessFlags.NONE);
+            }
+        } catch (e) {
+            log(`[PrismUI] Échec du lancement de ${appConfig.name} : ${e.message}`);
+        }
         return;
     }
 
@@ -3250,7 +3274,7 @@ function _launchOrDownloadApp(appId) {
         dirFile.make_directory_with_parents(null);
     }
 
-    let cmd = `wget -qO "${appImagePath}" "${downloadUrl}" && chmod +x "${appImagePath}" && "${appImagePath}"`;
+    let cmd = `wget -qO "${appImagePath}" "${downloadUrl}" && chmod +x "${appImagePath}" && ${launchCommand}`;
 
     try {
         let proc = Gio.Subprocess.new(
@@ -3290,16 +3314,26 @@ function _registerPrismApps() {
         let app = PRISM_APPS[id];
         let fileName = app.getFileName(arch, app.version);
         let filePath = GLib.build_filenamev([programDir, fileName]);
-        let downloadUrl = `https://github.com/${app.repo}/releases/download/${app.tag}/${fileName}`;
-        let desktopFilePath = GLib.build_filenamev([appsDir, `prism-${id}.desktop`]);
+        let desktopId = app.desktopId || id.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+        let desktopFilePath = GLib.build_filenamev([appsDir, `prism-${desktopId}.desktop`]);
+        let legacyDesktopFilePath = GLib.build_filenamev([appsDir, `prism-${id}.desktop`]);
+
+        if (legacyDesktopFilePath !== desktopFilePath) {
+            let legacyFile = Gio.File.new_for_path(legacyDesktopFilePath);
+            if (legacyFile.query_exists(null)) {
+                legacyFile.delete(null);
+            }
+        }
         
         let iconPath = GLib.build_filenamev([extDir, 'icons', `${app.icon}`]); 
-        
-        let execScript = `bash -c 'if [ ! -f "${filePath}" ]; then notify-send "PrismUI" "Installation de ${app.name} en cours..."; wget -qO "${filePath}" "${downloadUrl}" && chmod +x "${filePath}"; fi; "${filePath}"'`;
+        let isJavaScript = fileName.toLowerCase().endsWith('.js');
+        let execCommand = isJavaScript
+            ? `gjs "${filePath}"`
+            : `"${filePath}"`;
 
         let desktopContent = `[Desktop Entry]
 Name=${app.name}
-Exec=${execScript}
+Exec=${execCommand}
 Icon=${iconPath}
 Type=Application
 Categories=Utility;
