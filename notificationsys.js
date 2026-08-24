@@ -40,6 +40,8 @@ var NotificationManager = class NotificationManager {
             style_class: 'notification-button'
         });
         this.notificationButton.connect('clicked', () => this._toggleNotificationHistory());
+        this.notificationButton.connect('enter-event', () => this._showNotificationTooltip());
+        this.notificationButton.connect('leave-event', () => this._hideNotificationTooltip());
     
         this.notificationBox = new St.BoxLayout({
             vertical: false,
@@ -70,6 +72,38 @@ var NotificationManager = class NotificationManager {
         });
         Main.layoutManager.addChrome(this.historyContainer);
         this.historyContainer.hide();
+    }
+
+    _showNotificationTooltip() {
+        if (!this.notificationTooltip) {
+            this.notificationTooltip = new St.Label({
+                style_class: 'prism-status-tooltip',
+                text: 'Notifications',
+                style: 'background-color: rgba(30, 30, 30, 0.9); color: white; padding: 6px 10px; border-radius: 5px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);'
+            });
+            Main.layoutManager.addChrome(this.notificationTooltip);
+        }
+
+        this.notificationTooltip.show();
+        let [x, y] = this.notificationButton.get_transformed_position();
+        let [width, height] = this.notificationButton.get_transformed_size();
+        let monitor = Main.layoutManager.primaryMonitor;
+        let tooltipWidth = this.notificationTooltip.width;
+        let tooltipHeight = this.notificationTooltip.height;
+        let tooltipX = x + (width - tooltipWidth) / 2;
+        let tooltipY = y + height + 13;
+        let minX = monitor.x + 8;
+        let maxX = monitor.x + monitor.width - tooltipWidth - 8;
+        let maxY = monitor.y + monitor.height - tooltipHeight - 8;
+
+        tooltipX = Math.max(minX, Math.min(maxX, tooltipX));
+        if (tooltipY > maxY) tooltipY = y - tooltipHeight - 8;
+        tooltipY = Math.max(monitor.y + 8, Math.min(maxY, tooltipY));
+        this.notificationTooltip.set_position(tooltipX, tooltipY);
+    }
+
+    _hideNotificationTooltip() {
+        if (this.notificationTooltip) this.notificationTooltip.hide();
     }
 
     _setPosition() {
@@ -404,6 +438,14 @@ var NotificationManager = class NotificationManager {
     }
 
     destroy() {
+        this._hideNotificationTooltip();
+
+        if (this.notificationTooltip) {
+            Main.layoutManager.removeChrome(this.notificationTooltip);
+            this.notificationTooltip.destroy();
+            this.notificationTooltip = null;
+        }
+
         if (this._stageEventId) {
             global.stage.disconnect(this._stageEventId);
             this._stageEventId = null;
