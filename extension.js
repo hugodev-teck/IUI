@@ -1592,7 +1592,9 @@ class MyDock {
                 });
                 removeBtn.connect('clicked', () => {
                     Gio.File.new_for_path(filePath).delete(null);
-                    // Rafraîchir l'interface visuelle après suppression
+                    
+                    _registerPrismApps(); 
+                    
                     this.storeDialog.close();
                 });
                 btnBox.add_child(removeBtn);
@@ -3394,6 +3396,9 @@ function _launchOrDownloadApp(appId) {
             try {
                 obj.wait_check_finish(res);
                 Main.notify("PrismUI", `${appConfig.name} installé et lancé avec succès !`);
+                
+                _registerPrismApps();
+                
             } catch (e) {
                 log(`[PrismUI] Échec du téléchargement wget pour ${appConfig.name} : ${e.message}`);
                 Main.notify("PrismUI - Erreur", `Impossible de récupérer ${appConfig.name}.`);
@@ -3431,6 +3436,14 @@ function _registerPrismApps() {
             if (legacyFile.query_exists(null)) {
                 legacyFile.delete(null);
             }
+        }
+
+        let isInstalled = Gio.File.new_for_path(filePath).query_exists(null);
+
+        if (!isInstalled) {
+            let file = Gio.File.new_for_path(desktopFilePath);
+            if (file.query_exists(null)) file.delete(null);
+            continue; 
         }
         
         let iconPath = GLib.build_filenamev([extDir, 'icons', `${app.icon}`]); 
