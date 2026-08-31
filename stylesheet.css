@@ -23,7 +23,6 @@
     background-color: rgba(54, 53, 53, 0.836);
     padding: 10px;
     border-radius: 15px;
-    spacing: 5px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -207,7 +206,6 @@
 
 .notification-label {
     font-size: 14px;
-    line-height: 1.5;
     white-space: normal;
 }
 
@@ -223,15 +221,18 @@
 }
 
 .notification-history-container {
-    background-color: transparent;
-    border-radius: 5px;
-    padding: 10px;
-    max-height: 300px;
-    overflow-y: auto;
-    position: absolute;
-    bottom: 60px;
-    left: 20px;
-    right: 20px;
+    background-color: rgba(30, 30, 30, 0.95);
+    border-radius: 12px;
+    padding: 15px;
+    border: 1px solid rgba(90, 90, 90, 0.5);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
+    
+    /* Le ScrollView gère déjà le défilement, on ne met SURTOUT PAS d'overflow ni de max-height ici ! */
+    
+    /* Personnalisation de la barre de défilement */
+    -st-bar-background-color: rgba(0, 0, 0, 0.2);
+    -st-handle-border-radius: 6px;
+    -st-handle-background-color: rgba(255, 255, 255, 0.3);
 }
 
 .date-label {

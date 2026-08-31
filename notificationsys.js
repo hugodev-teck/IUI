@@ -16,6 +16,9 @@ var NotificationManager = class NotificationManager {
         this.soundEnabled = true;
         this.dndEnabled = false;
 
+        this._saveFile = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_config_dir(), 'prism-notifications.json']));
+        this._loadHistory();
+
         this.notificationContainer = new St.BoxLayout({
             vertical: true,
             style_class: 'notification-container'
@@ -26,6 +29,77 @@ var NotificationManager = class NotificationManager {
 
         this._setupNotificationListener();
         this._createNotificationIcon();
+    }
+
+    _saveHistory() {
+        let dataToSave = this.notifications.map(n => {
+            // Aplatissement de l'icône et de l'application pour le JSON
+            let iconStr = null;
+            if (n.iconData) {
+                if (typeof n.iconData === 'string') iconStr = n.iconData;
+                else if (typeof n.iconData.to_string === 'function') iconStr = n.iconData.to_string();
+            }
+
+            let appId = null;
+            if (n.app && typeof n.app.get_id === 'function') {
+                appId = n.app.get_id();
+            }
+
+            return {
+                id: n.id,
+                title: n.title,
+                message: n.message,
+                appName: n.appName,
+                time: n.time,
+                timestamp: n.timestamp,
+                iconStr: iconStr,
+                appId: appId
+            };
+        });
+
+        try {
+            this._saveFile.replace_contents(JSON.stringify(dataToSave), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+        } catch (e) {
+            log(`[PrismUI] Erreur de sauvegarde des notifications : ${e.message}`);
+        }
+    }
+
+    _loadHistory() {
+        try {
+            if (!this._saveFile.query_exists(null)) return;
+            let [ok, contents] = this._saveFile.load_contents(null);
+            if (ok) {
+                let rawData = JSON.parse(new TextDecoder("utf-8").decode(contents));
+                let now = Date.now();
+                const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000; // ~1 mois en millisecondes
+
+                const Shell = imports.gi.Shell;
+                let appSys = Shell.AppSystem.get_default();
+
+                this.notifications = [];
+                for (let n of rawData) {
+                    // Expiration : On ignore les messages vieux de plus d'un mois
+                    if (now - n.timestamp > ONE_MONTH_MS) continue;
+
+                    // Reconstruction des objets GNOME
+                    let gicon = n.iconStr ? Gio.icon_new_for_string(n.iconStr) : null;
+                    let app = n.appId ? appSys.lookup_app(n.appId) : null;
+
+                    this.notifications.push({
+                        id: n.id,
+                        title: n.title,
+                        message: n.message,
+                        appName: n.appName,
+                        time: n.time,
+                        timestamp: n.timestamp,
+                        iconData: gicon,
+                        app: app
+                    });
+                }
+            }
+        } catch (e) {
+            log(`[PrismUI] Erreur de chargement des notifications : ${e.message}`);
+        }
     }
 
     _createNotificationIcon() {
@@ -197,6 +271,7 @@ var NotificationManager = class NotificationManager {
         clearBtn.set_child(new St.Icon({ icon_name: 'edit-clear-all-symbolic', icon_size: 16 }));
         clearBtn.connect('clicked', () => {
             this.notifications = [];
+            this._saveHistory(); // NOUVEAU
             this._updateHistoryContainer();
         });
 
@@ -206,9 +281,27 @@ var NotificationManager = class NotificationManager {
 
         this.historyContainer.add_child(headerBox);
 
+        // --- NOUVEAU : LA ZONE DÉFILANTE ---
+        let scrollArea = new St.ScrollView({
+            style_class: 'vfade', // Optionnel : ajoute un bel effet de fondu aux extrémités si tu l'as dans ton CSS
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            x_expand: true,
+            y_expand: true
+        });
+        
+        let listContainer = new St.BoxLayout({ 
+            vertical: true,
+            style: 'padding-right: 10px; padding-bottom: 15px; spacing: 3px;',
+            y_align: Clutter.ActorAlign.START
+        });
+        
+        scrollArea.add_actor(listContainer);
+        this.historyContainer.add_child(scrollArea);
+
         if (this.notifications.length === 0) {
             let emptyLabel = new St.Label({ text: "Aucune notification", style: "color: #888; padding: 15px; text-align: center;" });
-            this.historyContainer.add_child(emptyLabel);
+            listContainer.add_child(emptyLabel);
         } else {
             this.notifications.slice().reverse().forEach(notification => { 
                 const { id, title, message, appName, iconData, time, app } = notification;
@@ -217,9 +310,11 @@ var NotificationManager = class NotificationManager {
                     vertical: true,
                     name: 'notif-box-2',
                     style_class: 'notification-box',
-                    style: 'padding: 8px; margin-bottom: 8px;',
-                    reactive: true
+                    style: 'padding: 7px;', // Juste ça !
+                    reactive: true,
+                    y_align: Clutter.ActorAlign.START
                 });
+
 
                 let headerNotifBox = new St.BoxLayout({name: 'notif-box-3-bs', vertical: false, style_class: 'notification-header-box' });
 
@@ -243,13 +338,40 @@ var NotificationManager = class NotificationManager {
                 
                 notificationBox.add_child(headerNotifBox);
 
-                let bodyText = message ? `${title}\n${message}` : title;
-                let notificationLabel = new St.Label({ text: bodyText, style_class: 'notification-label' });
-                notificationLabel.clutter_text.line_wrap = true;
-                notificationLabel.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
-                notificationBox.add_child(notificationLabel);
+                // --- 2. LE TEXTE COURT (Quand c'est fermé - 2 lignes max) ---
+                let titleLabel = new St.Label({ 
+                    text: title, 
+                    style_class: 'notification-label',
+                    style: 'font-weight: bold;' 
+                });
+                notificationBox.add_child(titleLabel);
 
-                let actionBox = new St.BoxLayout({name: 'notif-itm-box-2', vertical: false, style_class: 'notification-item-action-box' });
+                // --- 2. LE MESSAGE (Séparé, dynamique et légèrement plus clair) ---
+                let messageLabel = null;
+                let shortMsg = "";
+                
+                if (message && message.trim() !== "") {
+                    shortMsg = message.replace(/\n/g, ' '); // Enlève les sauts de ligne pour le mode court
+                    if (shortMsg.length > 70) {
+                        shortMsg = shortMsg.substring(0, 70) + '...';
+                    }
+
+                    messageLabel = new St.Label({ 
+                        text: shortMsg, 
+                        style_class: 'notification-label',
+                        style: 'margin-top: 2px; margin-bottom: 4px; color: #dddddd; font-size: 13px;' 
+                    });
+                    messageLabel.clutter_text.line_wrap = true;
+                    messageLabel.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+                    notificationBox.add_child(messageLabel);
+                }
+
+                let actionBox = new St.BoxLayout({
+                    name: 'notif-itm-box-2', 
+                    vertical: false, 
+                    style_class: 'notification-item-action-box',
+                    style: 'margin-top: 10px;' // C'EST ÇA QUI EMPÊCHE LE CHEVAUCHEMENT !
+                });
                 actionBox.hide();
 
                 if (app) {
@@ -291,24 +413,36 @@ var NotificationManager = class NotificationManager {
                 let deleteBtn = new St.Button({ label: 'Effacer', style_class: 'notification-item-btn', x_expand: true });
                 deleteBtn.connect('clicked', () => {
                     this.notifications = this.notifications.filter(n => n.id !== id);
+                    this._saveHistory();
                     this._updateHistoryContainer();
                 });
                 actionBox.add_child(deleteBtn);
 
                 notificationBox.add_child(actionBox);
 
-                notificationBox.connect('button-release-event', () => {
+                notificationBox.connect('button-release-event', (actor, event) => {
+                    if (actionBox.contains(event.get_source())) return Clutter.EVENT_PROPAGATE;
+
                     if (actionBox.visible) {
+                        // Action de refermer
                         actionBox.hide();
+                        if (messageLabel) messageLabel.set_text(shortMsg); // On replie le message
                         notificationBox.remove_style_class_name('notification-box-expanded');
                     } else {
+                        // Action d'ouvrir
                         actionBox.show();
+                        if (messageLabel) messageLabel.set_text(message); // On affiche tout le message
                         notificationBox.add_style_class_name('notification-box-expanded');
                     }
+                    
+                    // On force GNOME à recalculer la hauteur !
+                    if (messageLabel) messageLabel.queue_relayout();
+                    notificationBox.queue_relayout();
+                    
                     return Clutter.EVENT_PROPAGATE;
                 });
 
-                this.historyContainer.add_child(notificationBox);
+                listContainer.add_child(notificationBox);
             });
         }
     }
@@ -318,11 +452,18 @@ var NotificationManager = class NotificationManager {
         let timeString = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
         let notifId = Date.now().toString() + Math.random().toString();
 
-        this.notifications.push({ id: notifId, title, message, appName, iconData, time: timeString, app });
+        // NOUVEAU : Ajout du timestamp dans l'objet
+        this.notifications.push({ 
+            id: notifId, title, message, appName, iconData, time: timeString, app, 
+            timestamp: Date.now() 
+        });
         
-        if (this.notifications.length > 10) {
+        // MODIFIÉ : On passe la limite à 100 pour laisser à l'expiration de 1 mois le temps d'agir
+        if (this.notifications.length > 100) {
             this.notifications.shift(); 
         }
+
+        this._saveHistory(); // Sauvegarde immédiate sur le disque
 
         if (this.historyContainer.visible) {
             this._updateHistoryContainer();
