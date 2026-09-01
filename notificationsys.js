@@ -240,6 +240,35 @@ var NotificationManager = class NotificationManager {
         else this.dndBtn.remove_style_class_name('dnd-active');
     }
 
+    _formatNotificationTime(notification) {
+        if (!notification || typeof notification.timestamp !== 'number') {
+            return notification && notification.time ? notification.time : 'Aujourd’hui';
+        }
+
+        const now = new Date();
+        const notifDate = new Date(notification.timestamp);
+
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const notifDay = new Date(notifDate.getFullYear(), notifDate.getMonth(), notifDate.getDate());
+        const diffDays = Math.round((today - notifDay) / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) {
+            return notifDate.getHours().toString().padStart(2, '0') + ':' + notifDate.getMinutes().toString().padStart(2, '0');
+        }
+
+        if (diffDays === 1) {
+            return 'Hier à ' + notifDate.getHours().toString().padStart(2, '0') + ':' + notifDate.getMinutes().toString().padStart(2, '0');
+        }
+
+        if (diffDays === 2) {
+            return 'Avant-hier à ' + notifDate.getHours().toString().padStart(2, '0') + ':' + notifDate.getMinutes().toString().padStart(2, '0');
+        }
+
+        const day = notifDate.getDate().toString().padStart(2, '0');
+        const months = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+        return `${day} ${months[notifDate.getMonth()]}`;
+    }
+
     _updateHistoryContainer() {
         this.historyContainer.remove_all_children();
 
@@ -283,18 +312,20 @@ var NotificationManager = class NotificationManager {
 
         // --- NOUVEAU : LA ZONE DÉFILANTE ---
         let scrollArea = new St.ScrollView({
-            style_class: 'vfade', // Optionnel : ajoute un bel effet de fondu aux extrémités si tu l'as dans ton CSS
+            style_class: 'vfade',
             hscrollbar_policy: St.PolicyType.NEVER,
             vscrollbar_policy: St.PolicyType.AUTOMATIC,
             x_expand: true,
             y_expand: true
         });
+        scrollArea.set_height(Math.max(260, monitor.height - 140));
         
         let listContainer = new St.BoxLayout({ 
             vertical: true,
-            style: 'padding-right: 10px; padding-bottom: 15px; spacing: 3px;',
+            style: 'padding-right: 10px; padding-bottom: 7px; spacing: 3px;',
             y_align: Clutter.ActorAlign.START
         });
+        listContainer.set_width(PANEL_WIDTH - 30);
         
         scrollArea.add_actor(listContainer);
         this.historyContainer.add_child(scrollArea);
@@ -310,11 +341,11 @@ var NotificationManager = class NotificationManager {
                     vertical: true,
                     name: 'notif-box-2',
                     style_class: 'notification-box',
-                    style: 'padding: 7px;', // Juste ça !
+                    style: 'padding: 7px;',
                     reactive: true,
                     y_align: Clutter.ActorAlign.START
                 });
-
+                notificationBox.set_width(PANEL_WIDTH - 60);
 
                 let headerNotifBox = new St.BoxLayout({name: 'notif-box-3-bs', vertical: false, style_class: 'notification-header-box' });
 
@@ -333,7 +364,8 @@ var NotificationManager = class NotificationManager {
                 appNameLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
                 headerNotifBox.add_child(appNameLabel);
                 
-                let timeLabel = new St.Label({ text: time, style_class: 'notification-time-label' });
+                const displayTime = this._formatNotificationTime(notification);
+                let timeLabel = new St.Label({ text: displayTime, style_class: 'notification-time-label' });
                 headerNotifBox.add_child(timeLabel);
                 
                 notificationBox.add_child(headerNotifBox);
@@ -349,33 +381,51 @@ var NotificationManager = class NotificationManager {
                 // --- 2. LE MESSAGE (Séparé, dynamique et légèrement plus clair) ---
                 let messageLabel = null;
                 let shortMsg = "";
+                let needsTwoLines = false;
                 
                 if (message && message.trim() !== "") {
-                    shortMsg = message.replace(/\n/g, ' '); // Enlève les sauts de ligne pour le mode court
-                    if (shortMsg.length > 70) {
-                        shortMsg = shortMsg.substring(0, 70) + '...';
+                    shortMsg = message.replace(/\n/g, ' ');
+                    if (shortMsg.length > 80) {
+                        shortMsg = shortMsg.substring(0, 80).trim() + '…';
                     }
+                    needsTwoLines = shortMsg.length > 42;
 
                     messageLabel = new St.Label({ 
                         text: shortMsg, 
                         style_class: 'notification-label',
                         style: 'margin-top: 2px; margin-bottom: 4px; color: #dddddd; font-size: 13px;' 
                     });
+                    messageLabel.set_width(PANEL_WIDTH - 50);
+                    messageLabel.set_height(needsTwoLines ? 32 : 18);
                     messageLabel.clutter_text.line_wrap = true;
                     messageLabel.clutter_text.line_wrap_mode = Pango.WrapMode.WORD_CHAR;
+                    messageLabel.clutter_text.lines = needsTwoLines ? 2 : 1;
+                    messageLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
                     notificationBox.add_child(messageLabel);
                 }
+
+                const baseBoxHeight = needsTwoLines ? 88 : 74;
+                const expandedBoxHeight = baseBoxHeight + 39;
+                notificationBox.set_height(baseBoxHeight);
+                notificationBox._prismBaseHeight = baseBoxHeight;
+                notificationBox._prismExpandedHeight = expandedBoxHeight;
 
                 let actionBox = new St.BoxLayout({
                     name: 'notif-itm-box-2', 
                     vertical: false, 
                     style_class: 'notification-item-action-box',
-                    style: 'margin-top: 10px;' // C'EST ÇA QUI EMPÊCHE LE CHEVAUCHEMENT !
+                    style: 'margin-top: 2px; spacing: 8px; height: 22px; opacity: 0; visibility: hidden;'
                 });
                 actionBox.hide();
 
                 if (app) {
-                    let openBtn = new St.Button({ label: 'Ouvrir', style_class: 'notification-item-btn', x_expand: true });
+                    let openBtn = new St.Button({
+                        label: 'Ouvrir',
+                        style_class: 'notification-item-btn',
+                        x_expand: false,
+                        y_align: Clutter.ActorAlign.CENTER,
+                        style: 'padding: 2px 8px; height: 22px; font-size: 10px;'
+                    });
                     openBtn.connect('clicked', () => {
 
                         let isRunning = app.get_state() === Shell.AppState.RUNNING;
@@ -410,7 +460,13 @@ var NotificationManager = class NotificationManager {
                     actionBox.add_child(openBtn);
                 }
 
-                let deleteBtn = new St.Button({ label: 'Effacer', style_class: 'notification-item-btn', x_expand: true });
+                let deleteBtn = new St.Button({
+                    label: 'Effacer',
+                    style_class: 'notification-item-btn',
+                    x_expand: false,
+                    y_align: Clutter.ActorAlign.CENTER,
+                    style: 'padding: 2px 8px; height: 22px; font-size: 10px;'
+                });
                 deleteBtn.connect('clicked', () => {
                     this.notifications = this.notifications.filter(n => n.id !== id);
                     this._saveHistory();
@@ -423,22 +479,44 @@ var NotificationManager = class NotificationManager {
                 notificationBox.connect('button-release-event', (actor, event) => {
                     if (actionBox.contains(event.get_source())) return Clutter.EVENT_PROPAGATE;
 
-                    if (actionBox.visible) {
-                        // Action de refermer
+                    let wasVisible = actionBox.visible;
+                    listContainer.get_children().forEach(child => {
+                        if (child !== notificationBox) {
+                            if (child._prismActionsVisible) {
+                                child._prismActionsVisible = false;
+                                child.remove_style_class_name('notification-box-expanded');
+                                child.set_height(child._prismBaseHeight || 74);
+                                child.queue_relayout();
+                            }
+
+                            if (child.get_children) {
+                                let actionChild = child.get_children().find(c => c.has_style_class_name && c.has_style_class_name('notification-item-action-box'));
+                                if (actionChild) {
+                                    actionChild.hide();
+                                    actionChild.set_opacity(0);
+                                }
+                            }
+                        }
+                    });
+
+                    if (wasVisible) {
                         actionBox.hide();
-                        if (messageLabel) messageLabel.set_text(shortMsg); // On replie le message
+                        actionBox.set_opacity(0);
                         notificationBox.remove_style_class_name('notification-box-expanded');
+                        notificationBox.set_height(notificationBox._prismBaseHeight || 74);
+                        notificationBox.queue_relayout();
+                        listContainer.queue_relayout();
+                        notificationBox._prismActionsVisible = false;
                     } else {
-                        // Action d'ouvrir
+                        actionBox.set_opacity(255);
                         actionBox.show();
-                        if (messageLabel) messageLabel.set_text(message); // On affiche tout le message
                         notificationBox.add_style_class_name('notification-box-expanded');
+                        notificationBox.set_height(notificationBox._prismExpandedHeight || 102);
+                        notificationBox.queue_relayout();
+                        listContainer.queue_relayout();
+                        notificationBox._prismActionsVisible = true;
                     }
-                    
-                    // On force GNOME à recalculer la hauteur !
-                    if (messageLabel) messageLabel.queue_relayout();
-                    notificationBox.queue_relayout();
-                    
+
                     return Clutter.EVENT_PROPAGATE;
                 });
 
@@ -451,11 +529,11 @@ var NotificationManager = class NotificationManager {
         let now = new Date();
         let timeString = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
         let notifId = Date.now().toString() + Math.random().toString();
+        let timestamp = Date.now();
 
-        // NOUVEAU : Ajout du timestamp dans l'objet
         this.notifications.push({ 
-            id: notifId, title, message, appName, iconData, time: timeString, app, 
-            timestamp: Date.now() 
+            id: notifId, title, message, appName, iconData, time: timeString, app,
+            timestamp: timestamp
         });
         
         // MODIFIÉ : On passe la limite à 100 pour laisser à l'expiration de 1 mois le temps d'agir
@@ -508,7 +586,7 @@ var NotificationManager = class NotificationManager {
         appNameLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
         headerBox.add_child(appNameLabel);
         
-        let timeLabel = new St.Label({ text: timeString, style_class: 'notification-time-label' });
+        let timeLabel = new St.Label({ text: this._formatNotificationTime({ timestamp: timestamp, time: timeString }), style_class: 'notification-time-label' });
         headerBox.add_child(timeLabel);
 
         notificationBox.add_child(headerBox);
