@@ -66,7 +66,7 @@ const PRISM_APPS = {
     }
 };
 
-let NotificationManager, AppLauncher, TimeMachine, PrismWidgets, Clipboard;
+let NotificationManager, AppLauncher, PrismWidgets, Clipboard;
 let searchBar;
 let pollingId;
 let homeBar;
@@ -2884,7 +2884,7 @@ const UpdateManager = class {
         this._scope = extensionScope; // Pour accéder au dock ou au menu
         this.baseUrl = "https://projet-prism.fr/update/iui/last/";
         this.tempDir = GLib.build_filenamev([GLib.get_user_cache_dir(), 'prism-update']);
-        this.filesToUpdate = ["desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", "time.js", "stylesheet.css", "clipboard.js", "extension.js", "metadata.json", "icons/vlogo.png"];
+        this.filesToUpdate = ["desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", "stylesheet.css", "clipboard.js", "extension.js", "metadata.json", "icons/vlogo.png"];
         this._session = new Soup.Session();
     }
 
@@ -3496,7 +3496,6 @@ function enable() {
     try {
         NotificationManager = Me.imports.notificationsys.NotificationManager;
         AppLauncher = Me.imports.intelligentsearchbar.AppLauncher;
-        TimeMachine = Me.imports.time.TimeMachine;
         PrismWidgets = Me.imports.desktopWidgets.PrismWidgets;
         Clipboard = Me.imports.clipboard;
     } catch {
@@ -3507,7 +3506,6 @@ function enable() {
 
     if (!global.networkSetting) global.networkSetting = new NetworkSetting();
     if (!global.myDock) global.myDock = new MyDock();
-    if (!global._timeMachine) global._timeMachine = new TimeMachine();
     if (!global.appLauncher) global.appLauncher = new AppLauncher();
     if (!notificationManager) notificationManager = new NotificationManager();
     if (!global.prismWidgets) global.prismWidgets = new PrismWidgets();
@@ -3557,11 +3555,6 @@ function disable() {
     if (global.networkSetting) {
         global.networkSetting.destroy();
         global.networkSetting = null;
-    }
-
-    if (global._timeMachine) {
-        global._timeMachine.destroy();
-        global._timeMachine = null;
     }
 
     if (global.clipboardManager) {

@@ -33,7 +33,6 @@ var NotificationManager = class NotificationManager {
 
     _saveHistory() {
         let dataToSave = this.notifications.map(n => {
-            // Aplatissement de l'icône et de l'application pour le JSON
             let iconStr = null;
             if (n.iconData) {
                 if (typeof n.iconData === 'string') iconStr = n.iconData;
@@ -71,17 +70,15 @@ var NotificationManager = class NotificationManager {
             if (ok) {
                 let rawData = JSON.parse(new TextDecoder("utf-8").decode(contents));
                 let now = Date.now();
-                const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000; // ~1 mois en millisecondes
+                const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000; 
 
                 const Shell = imports.gi.Shell;
                 let appSys = Shell.AppSystem.get_default();
 
                 this.notifications = [];
                 for (let n of rawData) {
-                    // Expiration : On ignore les messages vieux de plus d'un mois
                     if (now - n.timestamp > ONE_MONTH_MS) continue;
 
-                    // Reconstruction des objets GNOME
                     let gicon = n.iconStr ? Gio.icon_new_for_string(n.iconStr) : null;
                     let app = n.appId ? appSys.lookup_app(n.appId) : null;
 
@@ -300,7 +297,7 @@ var NotificationManager = class NotificationManager {
         clearBtn.set_child(new St.Icon({ icon_name: 'edit-clear-all-symbolic', icon_size: 16 }));
         clearBtn.connect('clicked', () => {
             this.notifications = [];
-            this._saveHistory(); // NOUVEAU
+            this._saveHistory();
             this._updateHistoryContainer();
         });
 
@@ -310,7 +307,6 @@ var NotificationManager = class NotificationManager {
 
         this.historyContainer.add_child(headerBox);
 
-        // --- NOUVEAU : LA ZONE DÉFILANTE ---
         let scrollArea = new St.ScrollView({
             style_class: 'vfade',
             hscrollbar_policy: St.PolicyType.NEVER,
@@ -370,7 +366,6 @@ var NotificationManager = class NotificationManager {
                 
                 notificationBox.add_child(headerNotifBox);
 
-                // --- 2. LE TEXTE COURT (Quand c'est fermé - 2 lignes max) ---
                 let titleLabel = new St.Label({ 
                     text: title, 
                     style_class: 'notification-label',
@@ -378,7 +373,6 @@ var NotificationManager = class NotificationManager {
                 });
                 notificationBox.add_child(titleLabel);
 
-                // --- 2. LE MESSAGE (Séparé, dynamique et légèrement plus clair) ---
                 let messageLabel = null;
                 let shortMsg = "";
                 let needsTwoLines = false;
@@ -536,12 +530,11 @@ var NotificationManager = class NotificationManager {
             timestamp: timestamp
         });
         
-        // MODIFIÉ : On passe la limite à 100 pour laisser à l'expiration de 1 mois le temps d'agir
         if (this.notifications.length > 100) {
             this.notifications.shift(); 
         }
 
-        this._saveHistory(); // Sauvegarde immédiate sur le disque
+        this._saveHistory();
 
         if (this.historyContainer.visible) {
             this._updateHistoryContainer();

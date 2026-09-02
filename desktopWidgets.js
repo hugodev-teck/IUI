@@ -7,6 +7,59 @@ const GRID_SIZE = 50;
 
 const BUILTIN_WIDGETS = [
     {
+        id: "clock-widget",
+        name: "Horloge",
+        gridW: 6,
+        gridH: 3,
+        ui: {
+            type: 'box',
+            vertical: true,
+            style_class: 'prism-widget-box',
+            children: [
+                { type: 'label', id: 'clock-time', text: '--:--', style: 'text-align: center; font-size: 72px; font-weight: bold; color: white; margin-bottom: 4px;' },
+                { type: 'label', id: 'clock-date', text: 'Chargement...', style: 'text-align: center; font-size: 20px; color: #dfe7ff;' }
+            ]
+        },
+        bindings: [
+            {
+                targetId: 'clock-time',
+                targetProp: 'text',
+                interval: 60,
+                sourceType: 'cmd',
+                source: "date '+%H:%M'",
+                process: 'return data.trim();'
+            },
+            {
+                targetId: 'clock-date',
+                targetProp: 'text',
+                interval: 60,
+                sourceType: 'cmd',
+                source: "date '+%A %d %B %Y'",
+                process: 'return data.trim();'
+            }
+        ]
+    },
+    {
+        id: "shortcut-widget",
+        name: "Raccourci",
+        gridW: 2,
+        gridH: 2,
+        ui: {
+            type: 'box',
+            vertical: true,
+            style_class: 'prism-widget-box',
+            style: 'padding: 8px; spacing: 6px; border-radius: 16px; width: 100%; height: 100%; x-align: center; y-align: center; horizontal-align: center; vertical-align: middle;',
+            children: [
+                { type: 'icon', id: 'shortcut-icon', icon_name: 'application-x-executable', icon_size: 32, style: 'padding: 4px; x-align: center; y-align: center;' },
+                { type: 'label', id: 'shortcut-label', text: 'Choisir', style: 'font-size: 14px; color: white; text-align: center; line-height: 1.1; width: 100%; max-width: 100%; x-align: center; y-align: center;' }
+            ]
+        },
+        bindings: [
+            { sourceType: 'shortcut', targetId: 'shortcut-icon', targetProp: 'icon' },
+            { sourceType: 'shortcut', targetId: 'shortcut-label', targetProp: 'text' }
+        ]
+    },
+    {
         id: "sys-widget",
         name: "Système",
         gridW: 4, gridH: 3,
@@ -359,10 +412,13 @@ const BUILTIN_WIDGETS = [
 
 var PrismWidgets = class PrismWidgets {
     constructor() {
+        const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
         this.desktopContainer = new St.Widget({
             name: 'prism-desktop-widgets', layout_manager: new Clutter.FixedLayout(),
-            x_expand: true, y_expand: true, reactive: true 
+            x_expand: true, y_expand: true, reactive: false
         });
+        this.desktopContainer.set_size(monitor.width, monitor.height);
+        this.desktopContainer.set_position(monitor.x, monitor.y);
 
         Main.layoutManager._backgroundGroup.add_child(this.desktopContainer);
         
@@ -381,7 +437,11 @@ var PrismWidgets = class PrismWidgets {
     _saveLayout() {
         let layout = [];
         for (let w of this._widgets) {
-            if (w && w.get_parent() && w._prismType) layout.push({ type: w._prismType, x: w.x, y: w.y });
+            if (w && w.get_parent() && w._prismType) {
+                let item = { type: w._prismType, x: w.x, y: w.y };
+                if (w._prismType === 'shortcut-widget' && w._shortcutAppId) item.appId = w._shortcutAppId;
+                layout.push(item);
+            }
         }
         try {
             this._saveFile.replace_contents(JSON.stringify(layout), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
@@ -397,7 +457,7 @@ var PrismWidgets = class PrismWidgets {
                 for (let item of layout) {
                     let manifest = BUILTIN_WIDGETS.find(w => w.id === item.type);
                     if (manifest) {
-                        let newWidget = this._buildWidgetFromManifest(manifest);
+                        let newWidget = this._buildWidgetFromManifest(manifest, item.appId);
                         newWidget.set_position(item.x, item.y);
                         this.desktopContainer.add_child(newWidget);
                         this._widgets.push(newWidget);
@@ -408,9 +468,55 @@ var PrismWidgets = class PrismWidgets {
         } catch (e) {}
     }
 
+    _isEventInsideAnyWidget(event) {
+        let source = event.get_source();
+        if (!source) return false;
+
+        for (let widget of this._widgets) {
+            if (!widget) continue;
+            let actor = source;
+            while (actor) {
+                if (actor === widget) return true;
+                actor = actor.get_parent();
+            }
+        }
+
+        return false;
+    }
+
+    _isEventInsideEditControls(event) {
+        let source = event.get_source();
+        if (!source) return false;
+
+        for (let widget of this._widgets) {
+            if (!widget) continue;
+
+            for (let control of [widget._deleteBtn, widget._editBtn]) {
+                if (!control) continue;
+                let actor = source;
+                while (actor) {
+                    if (actor === control) return true;
+                    actor = actor.get_parent();
+                }
+            }
+        }
+
+        return false;
+    }
+
     _setupLongPress() {
-        this.desktopContainer.connect('button-press-event', (a, e) => { if (e.get_source() === this.desktopContainer) this._disableAllEditModes(); return false; });
-        this.desktopContainer.connect('touch-event', (a, e) => { if (e.type() === Clutter.EventType.TOUCH_BEGIN && e.get_source() === this.desktopContainer) this._disableAllEditModes(); return false; });
+        global.stage.connect('captured-event', (stage, event) => {
+            let type = event.type();
+            let editingActive = this._widgets.some(w => w && w._isEditing);
+
+            if (this._draggingWidget) return Clutter.EVENT_PROPAGATE;
+
+            if ((type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) && editingActive && !this._isEventInsideAnyWidget(event) && !this._isEventInsideEditControls(event)) {
+                this._disableAllEditModes();
+            }
+
+            return Clutter.EVENT_PROPAGATE;
+        });
     }
 
     _buildWidgetMenu() {
@@ -424,7 +530,7 @@ var PrismWidgets = class PrismWidgets {
         // 2. On l'applique à un St.Widget générique (au lieu d'un BoxLayout)
         this.menuContainer = new St.Widget({
             name: 'prism-widget-menu', 
-            style_class: 'prism-widget-menu', // Ton CSS actuel continuera de fonctionner
+            style_class: 'prism-widget-menu',
             layout_manager: flowLayout,
             reactive: true
         });
@@ -476,14 +582,25 @@ var PrismWidgets = class PrismWidgets {
         let widget;
         if (schema.type === 'box') widget = new St.BoxLayout({ vertical: schema.vertical || false, style_class: schema.style_class || '', style: schema.style || '' });
         else if (schema.type === 'label') widget = new St.Label({ text: schema.text || '', style_class: schema.style_class || '', style: schema.style || '' });
+        else if (schema.type === 'icon') widget = new St.Icon({
+            icon_name: schema.icon_name || 'application-x-executable',
+            gicon: schema.gicon || null,
+            icon_size: schema.icon_size || 24,
+            style_class: schema.style_class || '',
+            style: schema.style || ''
+        });
         else if (schema.type === 'progress') widget = new St.Widget({ style_class: schema.style_class || '', style: schema.style || '' });
 
+        if (!widget) return null;
         if (schema.id && refs) refs[schema.id] = widget;
-        if (schema.children) for (let childSchema of schema.children) widget.add_child(this._buildUIFromSchema(childSchema, refs));
+        if (schema.children) for (let childSchema of schema.children) {
+            let child = this._buildUIFromSchema(childSchema, refs);
+            if (child) widget.add_child(child);
+        }
         return widget;
     }
 
-    _buildWidgetFromManifest(manifest) {
+    _buildWidgetFromManifest(manifest, presetAppId = null) {
         let refs = {}; 
         let box = this._buildUIFromSchema(manifest.ui, refs);
         
@@ -492,8 +609,76 @@ var PrismWidgets = class PrismWidgets {
         box._timerIds = [];
         box._prismType = manifest.id;
 
+        const setupShortcutBinding = () => {
+            if (box._shortcutBindingReady) return;
+            box._shortcutBindingReady = true;
+            box._shortcutAppId = null;
+
+            if (refs['shortcut-icon']) {
+                refs['shortcut-icon'].set_icon_size(32);
+                refs['shortcut-icon'].x_expand = true;
+                refs['shortcut-icon'].y_expand = true;
+                refs['shortcut-icon'].set_x_align(Clutter.ActorAlign.CENTER);
+                refs['shortcut-icon'].set_y_align(Clutter.ActorAlign.CENTER);
+            }
+
+            if (refs['shortcut-label']) {
+                refs['shortcut-label'].x_expand = true;
+                refs['shortcut-label'].y_expand = true;
+                refs['shortcut-label'].set_width(Math.max(0, box.width - 12));
+                refs['shortcut-label'].set_x_align(Clutter.ActorAlign.CENTER);
+                refs['shortcut-label'].set_y_align(Clutter.ActorAlign.CENTER);
+                if (refs['shortcut-label'].clutter_text) {
+                    refs['shortcut-label'].clutter_text.set_line_wrap(true);
+                    refs['shortcut-label'].clutter_text.set_ellipsize(0);
+                }
+            }
+
+            const applyShortcut = (appInfo) => {
+                if (!appInfo || !refs['shortcut-icon'] || !refs['shortcut-label']) return;
+                box._shortcutAppId = appInfo.get_id();
+                refs['shortcut-icon'].set_gicon(appInfo.get_icon());
+                refs['shortcut-label'].set_text(appInfo.get_name());
+                refs['shortcut-label'].x_expand = true;
+                refs['shortcut-label'].y_expand = true;
+                refs['shortcut-label'].set_width(Math.max(0, box.width - 12));
+                refs['shortcut-label'].set_x_align(Clutter.ActorAlign.CENTER);
+                refs['shortcut-label'].set_y_align(Clutter.ActorAlign.CENTER);
+                if (refs['shortcut-label'].clutter_text) {
+                    refs['shortcut-label'].clutter_text.set_line_wrap(true);
+                    refs['shortcut-label'].clutter_text.set_ellipsize(0);
+                }
+            };
+
+            let appInfo = null;
+            if (presetAppId) appInfo = Gio.DesktopAppInfo.new(presetAppId);
+            if (appInfo) applyShortcut(appInfo);
+
+            if (!box._shortcutAppId) {
+                refs['shortcut-icon'].set_icon_name('application-x-executable');
+                refs['shortcut-label'].set_text('Choisir');
+                refs['shortcut-label'].x_expand = true;
+                refs['shortcut-label'].y_expand = true;
+                refs['shortcut-label'].set_width(Math.max(0, box.width - 12));
+                refs['shortcut-label'].set_x_align(Clutter.ActorAlign.CENTER);
+                refs['shortcut-label'].set_y_align(Clutter.ActorAlign.CENTER);
+                if (refs['shortcut-label'].clutter_text) {
+                    refs['shortcut-label'].clutter_text.set_line_wrap(true);
+                    refs['shortcut-label'].clutter_text.set_ellipsize(0);
+                }
+            }
+
+            box.reactive = true;
+            box._applyShortcut = applyShortcut;
+        };
+
         if (manifest.bindings) {
             for (let bind of manifest.bindings) {
+                if (bind.sourceType === 'shortcut') {
+                    setupShortcutBinding();
+                    continue;
+                }
+
                 const updateData = () => {
                     try {
                         if (bind.sourceType === 'file') {
@@ -540,10 +725,7 @@ var PrismWidgets = class PrismWidgets {
 
                         else if (bind.sourceType === 'http') {
                             try {
-                                // Détection propre de la version (2 ou 3)
                                 let isSoup3 = Soup.MAJOR_VERSION === 3;
-                                
-                                // Initialisation avec le masque "curl" intégré (marche partout !)
                                 let session = isSoup3 
                                     ? new Soup.Session({ user_agent: "curl/7.81.0" }) 
                                     : new Soup.SessionAsync({ user_agent: "curl/7.81.0" });
@@ -582,7 +764,6 @@ var PrismWidgets = class PrismWidgets {
                                     });
                                 }
                             } catch (e) {
-                                // Si ça crashe, ON AFFICHE LA VRAIE ERREUR sur le widget !
                                 if (refs[bind.targetId] && bind.targetProp === 'text') {
                                     let shortError = e.message ? e.message.substring(0, 15) : "Crash";
                                     refs[bind.targetId].set_text("Err: " + shortError);
@@ -658,6 +839,14 @@ var PrismWidgets = class PrismWidgets {
             this.desktopContainer.add_child(newWidget);
             this._widgets.push(newWidget);
             this._makeWidgetInteractive(newWidget);
+
+            if (newWidget._prismType === 'shortcut-widget' && !newWidget._shortcutAppId) {
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                    this._openShortcutAppPicker(newWidget);
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+
             this._saveLayout();
         };
 
@@ -676,26 +865,30 @@ var PrismWidgets = class PrismWidgets {
 
     _makeWidgetInteractive(widget) {
         widget.set_reactive(true);
-        let pressTimer = null, isPressing = false, startX = 0, startY = 0;
+        widget._isDragging = false;
+        widget._dragListenerId = 0;
+        let pressTimer = null, isPressing = false, startX = 0, startY = 0, pressStartTime = 0;
 
         const startPress = (x, y) => {
             if (isPressing || widget._isEditing) return;
-            isPressing = true; startX = x; startY = y;
-            
+            isPressing = true; startX = x; startY = y; pressStartTime = Date.now();
+
             pressTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, WIDGET_EDIT_TIME, () => {
-                this._enableEditMode(widget); 
-                pressTimer = null; 
-                isPressing = false; 
+                if (isPressing) {
+                    this._enableEditMode(widget);
+                    pressTimer = null;
+                    isPressing = false;
+                }
                 return GLib.SOURCE_REMOVE;
             });
         };
 
-        const cancelPress = () => { 
-            isPressing = false; 
-            if (pressTimer) { 
-                GLib.Source.remove(pressTimer); 
-                pressTimer = null; 
-            } 
+        const cancelPress = () => {
+            isPressing = false;
+            if (pressTimer) {
+                GLib.Source.remove(pressTimer);
+                pressTimer = null;
+            }
         };
 
         const handleMotion = (x, y) => {
@@ -704,117 +897,329 @@ var PrismWidgets = class PrismWidgets {
             }
         };
 
+        const handleQuickAction = () => {
+            if (!isPressing) return;
+            let elapsed = Date.now() - pressStartTime;
+            if (elapsed < WIDGET_EDIT_TIME) {
+                if (widget._prismType === 'shortcut-widget') {
+                    if (!widget._shortcutAppId) {
+                        this._openShortcutAppPicker(widget);
+                    } else {
+                        let appInfo = Gio.DesktopAppInfo.new(widget._shortcutAppId);
+                        if (appInfo) {
+                            try { appInfo.launch([], null); } catch (e) {}
+                        }
+                    }
+                }
+            }
+            cancelPress();
+        };
 
         widget.connect('button-press-event', (a, e) => {
-            if (e.get_button() === 1) { 
-                let [x, y] = e.get_coords(); 
+            if (e.get_button() === 1) {
+                let [x, y] = e.get_coords();
 
-                if (widget._isEditing) return this._startWidgetDrag(widget, x, y); 
-                startPress(x, y); 
-                return Clutter.EVENT_STOP; 
-            } 
+                if (widget._isEditing) {
+                    this._startWidgetDrag(widget, x, y);
+                    return Clutter.EVENT_STOP;
+                }
+                startPress(x, y);
+                return Clutter.EVENT_STOP;
+            }
             return Clutter.EVENT_PROPAGATE;
         });
 
-        widget.connect('motion-event', (a, e) => { 
-            handleMotion(...e.get_coords()); 
-            return Clutter.EVENT_PROPAGATE; 
+        widget.connect('motion-event', (a, e) => {
+            handleMotion(...e.get_coords());
+            return Clutter.EVENT_PROPAGATE;
         });
-        
-        widget.connect('button-release-event', () => { 
-            cancelPress(); 
-            return Clutter.EVENT_PROPAGATE; 
+
+        widget.connect('button-release-event', () => {
+            handleQuickAction();
+            return Clutter.EVENT_PROPAGATE;
         });
-        
-        widget.connect('leave-event', () => { 
-            cancelPress(); 
-            return Clutter.EVENT_PROPAGATE; 
+
+        widget.connect('leave-event', () => {
+            cancelPress();
+            return Clutter.EVENT_PROPAGATE;
         });
 
         widget.connect('touch-event', (a, e) => {
-            let type = e.type(); 
+            let type = e.type();
             let [x, y] = e.get_coords();
-            
-            if (type === Clutter.EventType.TOUCH_BEGIN) { 
 
-                if (widget._isEditing) return this._startWidgetDrag(widget, x, y); 
-                startPress(x, y); 
-                return Clutter.EVENT_STOP; 
-            } 
-            else if (type === Clutter.EventType.TOUCH_UPDATE) { 
-                handleMotion(x, y); 
-            } 
-            else if (type === Clutter.EventType.TOUCH_END || type === Clutter.EventType.TOUCH_CANCEL) { 
-                cancelPress(); 
+            if (type === Clutter.EventType.TOUCH_BEGIN) {
+                if (widget._isEditing) {
+                    this._startWidgetDrag(widget, x, y);
+                    return Clutter.EVENT_STOP;
+                }
+                startPress(x, y);
+                return Clutter.EVENT_STOP;
+            }
+            else if (type === Clutter.EventType.TOUCH_UPDATE) {
+                if (widget._isDragging) return Clutter.EVENT_STOP;
+                handleMotion(x, y);
+            }
+            else if (type === Clutter.EventType.TOUCH_END || type === Clutter.EventType.TOUCH_CANCEL) {
+                if (widget._isDragging) return Clutter.EVENT_STOP;
+                handleQuickAction();
             }
             return Clutter.EVENT_PROPAGATE;
         });
     }
 
+    _openShortcutAppPicker(widget) {
+        let apps = Gio.AppInfo.get_all().filter(app => app.should_show()).sort((a, b) => a.get_name().localeCompare(b.get_name()));
+        if (!apps.length) return;
+
+        let popupWidth = 280;
+        let popupHeight = 360;
+        let perPage = 7;
+        let pageIndex = 0;
+
+        let outer = new St.BoxLayout({
+            vertical: true,
+            reactive: true,
+            style: 'background: rgba(16, 18, 24, 0.96); border-radius: 12px; padding: 8px; spacing: 8px;'
+        });
+        outer.set_size(popupWidth, popupHeight);
+
+        let title = new St.Label({
+            text: 'Choisir un logiciel',
+            style: 'color: white; font-weight: bold; margin: 4px 6px;'
+        });
+        title.set_size(popupWidth - 20, 18);
+        outer.add_child(title);
+
+        let pageInfo = new St.Label({
+            text: 'Page 1',
+            style: 'color: #dfe7ff; text-align: center; margin: 0 6px;'
+        });
+        pageInfo.set_size(popupWidth - 20, 18);
+
+        let nav = new St.BoxLayout({
+            style: 'spacing: 8px; horizontal-align: center;'
+        });
+        nav.set_size(popupWidth - 20, 30);
+
+        let prevBtn = new St.Button({ label: '<', reactive: true, style: 'padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.06); color: white;' });
+        prevBtn.set_size(42, 24);
+        prevBtn.x_expand = false;
+        prevBtn.y_expand = false;
+
+        let nextBtn = new St.Button({ label: '>', reactive: true, style: 'padding: 4px 10px; border-radius: 8px; background: rgba(255,255,255,0.06); color: white;' });
+        nextBtn.set_size(42, 24);
+        nextBtn.x_expand = false;
+        nextBtn.y_expand = false;
+
+        pageInfo.set_size(90, 18);
+        pageInfo.x_expand = false;
+        pageInfo.y_expand = false;
+
+        nav.add_child(prevBtn);
+        nav.add_child(pageInfo);
+        nav.add_child(nextBtn);
+        outer.add_child(nav);
+
+        let list = new St.BoxLayout({ vertical: true, style: 'spacing: 6px;' });
+        list.set_size(popupWidth - 24, popupHeight - 90);
+        outer.add_child(list);
+
+        const renderPage = () => {
+            let totalPages = Math.max(1, Math.ceil(apps.length / perPage));
+            let safeIndex = Math.min(pageIndex, totalPages - 1);
+            pageIndex = safeIndex;
+
+            pageInfo.set_text('Page ' + (pageIndex + 1) + ' / ' + totalPages);
+            prevBtn.reactive = pageIndex > 0;
+            nextBtn.reactive = pageIndex < totalPages - 1;
+
+            for (let child of list.get_children()) {
+                child.destroy();
+            }
+
+            let start = pageIndex * perPage;
+            let end = Math.min(start + perPage, apps.length);
+
+            for (let i = start; i < end; i++) {
+                let app = apps[i];
+                let row = new St.Button({
+                    reactive: true,
+                    style: 'padding: 6px 8px; border-radius: 8px; background: rgba(255,255,255,0.04);'
+                });
+                row.set_size(popupWidth - 28, 32);
+
+                let content = new St.BoxLayout({ style: 'spacing: 8px; vertical-align: middle;' });
+                content.set_size(popupWidth - 40, 24);
+
+                let icon = new St.Icon({ gicon: app.get_icon(), icon_size: 18 });
+                let label = new St.Label({ text: app.get_name(), style: 'color: white;' });
+                if (label.clutter_text) label.clutter_text.set_line_wrap(false);
+
+                content.add_child(icon);
+                content.add_child(label);
+                row.set_child(content);
+
+                row.connect('button-press-event', () => {
+                    if (widget && widget._applyShortcut) widget._applyShortcut(app);
+                    this._saveLayout();
+                    if (outer && outer.get_parent()) outer.destroy();
+                    return Clutter.EVENT_STOP;
+                });
+
+                list.add_child(row);
+            }
+        };
+
+        prevBtn.connect('button-press-event', (actor, event) => {
+            if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+            if (pageIndex > 0) {
+                pageIndex -= 1;
+                renderPage();
+            }
+            return Clutter.EVENT_STOP;
+        });
+
+        nextBtn.connect('button-press-event', (actor, event) => {
+            if (event.get_button() !== 1) return Clutter.EVENT_PROPAGATE;
+            let totalPages = Math.max(1, Math.ceil(apps.length / perPage));
+            if (pageIndex < totalPages - 1) {
+                pageIndex += 1;
+                renderPage();
+            }
+            return Clutter.EVENT_STOP;
+        });
+
+        renderPage();
+        Main.uiGroup.add_child(outer);
+
+        let monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
+        let x = monitor.x + Math.max(0, (monitor.width - popupWidth) / 2);
+        let y = monitor.y + Math.max(0, (monitor.height - popupHeight) / 2);
+        outer.set_position(x, y);
+        outer.show();
+    }
+
     _enableEditMode(widget) {
         if (widget._isEditing) return;
-        widget._isEditing = true; widget.add_style_class_name('prism-widget-editing');
+        widget._isEditing = true;
+        widget.add_style_class_name('prism-widget-editing');
 
         let deleteBtn = new St.Button({ label: '✕', style_class: 'prism-widget-delete-btn', reactive: true });
         this.desktopContainer.add_child(deleteBtn);
         deleteBtn.set_position(widget.x - 10, widget.y - 10);
         widget._deleteBtn = deleteBtn;
 
+        let editBtn = null;
+        if (widget._prismType === 'shortcut-widget') {
+            editBtn = new St.Button({ label: '⋯', style_class: 'prism-widget-delete-btn', reactive: true });
+            this.desktopContainer.add_child(editBtn);
+            editBtn.set_position(widget.x + widget.width - 8, widget.y - 10);
+            widget._editBtn = editBtn;
+
+            editBtn.connect('button-press-event', (a, e) => {
+                if (e.get_button() === 1) {
+                    this._openShortcutAppPicker(widget);
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
+        }
+
         const closeAction = () => {
-            widget.destroy(); deleteBtn.destroy();
+            try {
+                if (widget && widget.get_parent()) widget.get_parent().remove_child(widget);
+                if (deleteBtn && deleteBtn.get_parent()) deleteBtn.get_parent().remove_child(deleteBtn);
+                if (editBtn && editBtn.get_parent()) editBtn.get_parent().remove_child(editBtn);
+
+                if (widget) {
+                    widget._isEditing = false;
+                    widget.remove_style_class_name('prism-widget-editing');
+                    widget.destroy();
+                }
+                if (deleteBtn) deleteBtn.destroy();
+                if (editBtn) editBtn.destroy();
+            } catch (e) {
+            }
+
             this._widgets = this._widgets.filter(w => w !== widget);
-            this._saveLayout(); return true;
+            this._saveLayout();
+            return Clutter.EVENT_STOP;
         };
 
-        deleteBtn.connect('button-press-event', (a, e) => { if (e.get_button() === 1) return closeAction(); return false; });
-        deleteBtn.connect('touch-event', (a, e) => { if (e.type() === Clutter.EventType.TOUCH_BEGIN) return closeAction(); return false; });
+        deleteBtn.connect('button-press-event', (a, e) => {
+            if (e.get_button() === 1) return closeAction();
+            return Clutter.EVENT_PROPAGATE;
+        });
+        deleteBtn.connect('touch-event', (a, e) => {
+            if (e.type() === Clutter.EventType.TOUCH_BEGIN) return closeAction();
+            return Clutter.EVENT_PROPAGATE;
+        });
     }
 
     _disableAllEditModes() {
         for (let widget of this._widgets) {
             if (widget && widget._isEditing) {
+                widget._isDragging = false;
+                if (widget._dragListenerId) {
+                    global.stage.disconnect(widget._dragListenerId);
+                    widget._dragListenerId = 0;
+                }
                 widget._isEditing = false; widget.remove_style_class_name('prism-widget-editing');
+                if (widget._deleteBtn && widget._deleteBtn.get_parent()) widget._deleteBtn.get_parent().remove_child(widget._deleteBtn);
+                if (widget._editBtn && widget._editBtn.get_parent()) widget._editBtn.get_parent().remove_child(widget._editBtn);
                 if (widget._deleteBtn) { widget._deleteBtn.destroy(); widget._deleteBtn = null; }
+                if (widget._editBtn) { widget._editBtn.destroy(); widget._editBtn = null; }
             }
         }
         this._widgets = this._widgets.filter(w => w !== null && w.get_parent() !== null);
     }
 
     _startWidgetDrag(widget, startX, startY) {
-        let offsetX = startX - widget.x; 
-        let offsetY = startY - widget.y;
-        let stageEventId = 0;
+        if (widget._isDragging || this._draggingWidget === widget) return;
+
+        widget._isDragging = true;
+        this._draggingWidget = widget;
+        widget._dragOffsetX = startX - widget.x;
+        widget._dragOffsetY = startY - widget.y;
 
         const endDrag = () => {
-            if (stageEventId) { 
-                global.stage.disconnect(stageEventId); 
-                stageEventId = 0; 
+            if (widget._dragListenerId) {
+                global.stage.disconnect(widget._dragListenerId);
+                widget._dragListenerId = 0;
             }
+            widget._isDragging = false;
+            if (this._draggingWidget === widget) this._draggingWidget = null;
+            if (widget._deleteBtn) widget._deleteBtn.set_position(widget.x - 10, widget.y - 10);
+            if (widget._editBtn) widget._editBtn.set_position(widget.x + widget.width - 8, widget.y - 10);
             this._saveLayout();
         };
 
         const updatePosition = (x, y) => {
-            let snappedX = this._snap(x - offsetX); 
-            let snappedY = this._snap(y - offsetY);
+            let snappedX = this._snap(x - widget._dragOffsetX);
+            let snappedY = this._snap(y - widget._dragOffsetY);
             widget.set_position(snappedX, snappedY);
             if (widget._deleteBtn) widget._deleteBtn.set_position(snappedX - 10, snappedY - 10);
+            if (widget._editBtn) widget._editBtn.set_position(snappedX + widget.width - 8, snappedY - 10);
         };
 
-        stageEventId = global.stage.connect('captured-event', (stage, event) => {
+        widget._dragListenerId = global.stage.connect('captured-event', (stage, event) => {
             let type = event.type();
             let [cx, cy] = event.get_coords();
 
             if (type === Clutter.EventType.MOTION || type === Clutter.EventType.TOUCH_UPDATE) {
-                updatePosition(cx, cy);
-                return Clutter.EVENT_STOP;
-            } else if (type === Clutter.EventType.BUTTON_RELEASE || type === Clutter.EventType.TOUCH_END) {
-                endDrag();
-                return Clutter.EVENT_STOP;
+                if (widget._isDragging) {
+                    updatePosition(cx, cy);
+                    return Clutter.EVENT_STOP;
+                }
+            } else if (type === Clutter.EventType.BUTTON_RELEASE || type === Clutter.EventType.TOUCH_END || type === Clutter.EventType.BUTTON_RELEASE) {
+                if (widget._isDragging) {
+                    endDrag();
+                    return Clutter.EVENT_STOP;
+                }
             }
             return Clutter.EVENT_PROPAGATE;
         });
-        
-        return true;
     }
 
     destroy() {
