@@ -3,21 +3,21 @@ const Main = imports.ui.main;
 
 const LONG_PRESS_TIME = 1500;
 const WIDGET_EDIT_TIME = 800;
-const GRID_SIZE = 50;
+const GRID_SIZE = 25;
 
 const BUILTIN_WIDGETS = [
     {
         id: "clock-widget",
         name: "Horloge",
-        gridW: 6,
-        gridH: 3,
+        gridW: 14,
+        gridH: 8,
         ui: {
             type: 'box',
             vertical: true,
             style_class: 'prism-widget-box',
             children: [
-                { type: 'label', id: 'clock-time', text: '--:--', style: 'text-align: center; font-size: 72px; font-weight: bold; color: white; margin-bottom: 4px;' },
-                { type: 'label', id: 'clock-date', text: 'Chargement...', style: 'text-align: center; font-size: 20px; color: #dfe7ff;' }
+                { type: 'label', id: 'clock-time', text: '--:--', style: 'text-align: center; font-size: 97px; font-weight: bold; color: white; margin-bottom: 4px;' },
+                { type: 'label', id: 'clock-date', text: 'Chargement...', style: 'text-align: center; font-size: 18px; color: #dfe7ff;' }
             ]
         },
         bindings: [
@@ -34,16 +34,30 @@ const BUILTIN_WIDGETS = [
                 targetProp: 'text',
                 interval: 60,
                 sourceType: 'cmd',
-                source: "date '+%A %d %B %Y'",
-                process: 'return data.trim();'
+                source: "date '+%u_%d_%m_%Y'", // On récupère le numéro du jour (%u) et du mois (%m)
+                process: `
+                    let parts = data.trim().split('_');
+                    let dayOfWeek = parseInt(parts[0]);
+                    let dayNum = parts[1];
+                    let monthNum = parseInt(parts[2]);
+                    let year = parts[3];
+
+                    let days = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+                    let months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+
+                    let dName = days[dayOfWeek - 1] || '';
+                    let mName = months[monthNum - 1] || '';
+
+                    return dName + ' ' + dayNum + ' ' + mName + ' ' + year;
+                `
             }
         ]
     },
     {
         id: "shortcut-widget",
         name: "Raccourci",
-        gridW: 2,
-        gridH: 2,
+        gridW: 4,
+        gridH: 4,
         ui: {
             type: 'box',
             vertical: true,
@@ -62,7 +76,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "sys-widget",
         name: "Système",
-        gridW: 4, gridH: 3,
+        gridW: 8, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -150,7 +164,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "bat-widget",
         name: "Batterie",
-        gridW: 3, gridH: 3,
+        gridW: 6, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -175,7 +189,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "weather-widget",
         name: "Météo",
-        gridW: 4, gridH: 3,
+        gridW: 8, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-df-meteo-box',
             children: [
@@ -202,7 +216,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "weather-widget-big",
         name: "Météo (Grand)",
-        gridW: 5, gridH: 4,
+        gridW: 10, gridH: 8,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-df-meteo-box',
             children: [
@@ -257,7 +271,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "crypto-widget",
         name: "Crypto-monnaies",
-        gridW: 4, gridH: 3,
+        gridW: 8, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -297,7 +311,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "forex-widget",
         name: "Devises",
-        gridW: 4, gridH: 3,
+        gridW: 8, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -335,7 +349,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "net-monitor",
         name: "Réseau & IP",
-        gridW: 4, gridH: 3,
+        gridW: 8, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -361,7 +375,7 @@ const BUILTIN_WIDGETS = [
     {
         id: "cpu-temp-widget",
         name: "Température CPU",
-        gridW: 3, gridH: 3,
+        gridW: 6, gridH: 6,
         ui: {
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
@@ -419,6 +433,14 @@ var PrismWidgets = class PrismWidgets {
         });
         this.desktopContainer.set_size(monitor.width, monitor.height);
         this.desktopContainer.set_position(monitor.x, monitor.y);
+
+        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
+            const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
+            if (this.desktopContainer) {
+                this.desktopContainer.set_size(monitor.width, monitor.height);
+                this.desktopContainer.set_position(monitor.x, monitor.y);
+            }
+        });
 
         Main.layoutManager._backgroundGroup.add_child(this.desktopContainer);
         
@@ -704,10 +726,9 @@ var PrismWidgets = class PrismWidgets {
 
                             proc.communicate_utf8_async(null, null, (obj, res) => {
                                 try {
+                                    if (!box || !box.get_parent()) return;
                                     let [ok, stdout, stderr] = obj.communicate_utf8_finish(res);
-                                    
                                     let rawData = stdout ? stdout.trim() : "";
-                                    
                                     let processor = new Function('data', bind.process);
                                     let finalValue = processor(rawData);
 
@@ -716,7 +737,7 @@ var PrismWidgets = class PrismWidgets {
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
                                     }
                                 } catch (e) {
-                                    if (refs[bind.targetId] && bind.targetProp === 'text') {
+                                    if (box && box.get_parent() && refs[bind.targetId] && bind.targetProp === 'text') {
                                         refs[bind.targetId].set_text("Erreur ⚠️");
                                     }
                                 }
@@ -733,6 +754,7 @@ var PrismWidgets = class PrismWidgets {
                                 let message = Soup.Message.new('GET', bind.source);
 
                                 const applyData = (rawData) => {
+                                    if (!box || !box.get_parent()) return;
                                     if (rawData) {
                                         let processor = new Function('data', bind.process);
                                         let finalValue = processor(rawData.toString().trim());
@@ -744,7 +766,7 @@ var PrismWidgets = class PrismWidgets {
                                 };
 
                                 const showError = (errStr) => {
-                                    if (refs[bind.targetId] && bind.targetProp === 'text') refs[bind.targetId].set_text(errStr);
+                                    if (box && box.get_parent() && refs[bind.targetId] && bind.targetProp === 'text') refs[bind.targetId].set_text(errStr);
                                 };
 
                                 if (isSoup3) {
@@ -1175,6 +1197,24 @@ var PrismWidgets = class PrismWidgets {
         this._widgets = this._widgets.filter(w => w !== null && w.get_parent() !== null);
     }
 
+    _checkCollision(x, y, w, h, ignoreWidget = null) {
+
+        for (let widget of this._widgets) {
+            if (!widget || widget === ignoreWidget) continue;
+
+            let wx = widget.x;
+            let wy = widget.y;
+            let ww = widget.width;
+            let wh = widget.height;
+
+            if (x < wx + ww && x + w > wx && y < wy + wh && y + h > wy) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     _startWidgetDrag(widget, startX, startY) {
         if (widget._isDragging || this._draggingWidget === widget) return;
 
@@ -1182,6 +1222,9 @@ var PrismWidgets = class PrismWidgets {
         this._draggingWidget = widget;
         widget._dragOffsetX = startX - widget.x;
         widget._dragOffsetY = startY - widget.y;
+
+        let lastValidX = widget.x;
+        let lastValidY = widget.y;
 
         const endDrag = () => {
             if (widget._dragListenerId) {
@@ -1196,11 +1239,25 @@ var PrismWidgets = class PrismWidgets {
         };
 
         const updatePosition = (x, y) => {
+            const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
             let snappedX = this._snap(x - widget._dragOffsetX);
             let snappedY = this._snap(y - widget._dragOffsetY);
-            widget.set_position(snappedX, snappedY);
-            if (widget._deleteBtn) widget._deleteBtn.set_position(snappedX - 10, snappedY - 10);
-            if (widget._editBtn) widget._editBtn.set_position(snappedX + widget.width - 8, snappedY - 10);
+
+            let maxX = monitor.width - widget.width;
+            let maxY = monitor.height - widget.height;
+            snappedX = Math.max(0, Math.min(snappedX, maxX));
+            snappedY = Math.max(0, Math.min(snappedY, maxY));
+
+            if (!this._checkCollision(snappedX, snappedY, widget.width, widget.height, widget)) {
+                lastValidX = snappedX;
+                lastValidY = snappedY;
+                widget.set_position(snappedX, snappedY);
+            } else {
+                widget.set_position(lastValidX, lastValidY);
+            }
+
+            if (widget._deleteBtn) widget._deleteBtn.set_position(widget.x - 10, widget.y - 10);
+            if (widget._editBtn) widget._editBtn.set_position(widget.x + widget.width - 8, widget.y - 10);
         };
 
         widget._dragListenerId = global.stage.connect('captured-event', (stage, event) => {
@@ -1212,7 +1269,7 @@ var PrismWidgets = class PrismWidgets {
                     updatePosition(cx, cy);
                     return Clutter.EVENT_STOP;
                 }
-            } else if (type === Clutter.EventType.BUTTON_RELEASE || type === Clutter.EventType.TOUCH_END || type === Clutter.EventType.BUTTON_RELEASE) {
+            } else if (type === Clutter.EventType.BUTTON_RELEASE || type === Clutter.EventType.TOUCH_END) {
                 if (widget._isDragging) {
                     endDrag();
                     return Clutter.EVENT_STOP;
@@ -1224,6 +1281,10 @@ var PrismWidgets = class PrismWidgets {
 
     destroy() {
         this._disableAllEditModes();
+        if (this._monitorsChangedId) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
         if (this.desktopContainer) { this.desktopContainer.destroy(); this.desktopContainer = null; }
         if (this.menuContainer) { this.menuContainer.destroy(); this.menuContainer = null; }
     }
