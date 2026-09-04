@@ -595,7 +595,7 @@ class MyDock {
         
         let leftScroll = new St.ScrollView({ style_class: 'vfade', hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true, y_expand: true });
         this._systemAppList = new St.BoxLayout({ vertical: true });
-        leftScroll.add_actor(this._systemAppList);
+        leftScroll.set_child(this._systemAppList);
         leftCol.add_child(leftScroll);
 
         // --- COLONNE DROITE (Ton Dock) ---
@@ -604,7 +604,7 @@ class MyDock {
         
         let rightScroll = new St.ScrollView({ style_class: 'vfade', hscrollbar_policy: St.PolicyType.NEVER, vscrollbar_policy: St.PolicyType.AUTOMATIC, x_expand: true, y_expand: true });
         this._dockAppList = new St.BoxLayout({ vertical: true });
-        rightScroll.add_actor(this._dockAppList);
+        rightScroll.set_child(this._dockAppList);
         rightCol.add_child(rightScroll);
 
         mainBox.add_child(leftCol);
