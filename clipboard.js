@@ -5,12 +5,15 @@
 /*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
 /*                                                                */
 
-const { St, GLib, Gio, Clutter, Shell } = imports.gi;
-const Main = imports.ui.main;
-const ExtensionUtils = imports.misc.extensionUtils;
-const Me = ExtensionUtils.getCurrentExtension();
+import St from 'gi://St';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
+import Shell from 'gi://Shell';
 
-var ClipboardManager = class ClipboardManager {
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+export class ClipboardManager {
     constructor() {
         this.history = [];
         this.MAX_HISTORY = 15;
@@ -93,7 +96,7 @@ var ClipboardManager = class ClipboardManager {
         });
         
         this.historyList = new St.BoxLayout({name: 'hystory-list', vertical: true, style_class: 'clipboard-list' });
-        this.scroll.add_actor(this.historyList);
+        this.scroll.set_child(this.historyList);
         this.menuBox.add_child(this.scroll);
 
         this._refreshMenuUI();
@@ -115,18 +118,35 @@ var ClipboardManager = class ClipboardManager {
         
         this.isOpen = true;
 
-        this.clickBinder = global.stage.connect('clicked', (actor, event) => {
-            let target = event.get_source();
-            let isClickOnButton = (anchorButton && (target === anchorButton || anchorButton.contains(target)));
+        this.clickBinder = global.stage.connect('captured-event', (stage, event) => {
+            let type = event.type();
             
-            if (!isClickOnButton && !this.menuBox.contains(target)) {
+            if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+                let coords = event.get_coords();
+                if (!coords) return Clutter.EVENT_PROPAGATE;
+                let [mouseX, mouseY] = coords;
+
+                let isInside = (actor, px, py) => {
+                    if (!actor || !actor.visible) return false;
+                    let [ax, ay] = actor.get_transformed_position();
+                    let [aw, ah] = actor.get_transformed_size();
+                    return px >= ax && px <= ax + aw && py >= ay && py <= ay + ah;
+                };
+
+                if (isInside(this.menuBox, mouseX, mouseY) || (anchorButton && isInside(anchorButton, mouseX, mouseY))) {
+                    return Clutter.EVENT_PROPAGATE;
+                }
+
                 this.closeMenu();
+                return Clutter.EVENT_PROPAGATE;
             }
+            
+            return Clutter.EVENT_PROPAGATE;
         });
     }
 
     _refreshMenuUI() {
-        this.historyList.remove_all_children();
+        this.historyList.destroy_all_children();
 
         if (this.history.length === 0) {
             let emptyLabel = new St.Label({ 
