@@ -1,12 +1,12 @@
 {
   "uuid": "prism@dock.ui",
   "name": "IUI Bêta",
-  "description": "Ceci est l'extension officielle pour prismUI",
+  "description": "Ceci est l'extension officielle pour IUI",
   "shell-version": [ "48" ],
-  "url": "https://prism-project-id.web.app",
+  "url": "https://projet-prism.fr",
   "permissions": ["org.gnome.shell"],
   "settings-schema": "org.gnome.shell.extensions.pdock",
-  "version": 1.12,
+  "version": 1.40,
   "sub-version": "K001",
   "title-version": "Wayland Edition"
 }
