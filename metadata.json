@@ -7,6 +7,6 @@
   "permissions": ["org.gnome.shell"],
   "settings-schema": "org.gnome.shell.extensions.pdock",
   "version": 1.40,
-  "sub-version": "K001",
+  "sub-version": "K002",
   "title-version": "Wayland Edition"
 }

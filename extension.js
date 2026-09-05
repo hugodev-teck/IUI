@@ -88,7 +88,6 @@ class MyDock {
         this._editMode = false;
         this.addButton = null;
 
-        // Utilisation de this._ext.path au lieu de ExtensionUtils
         this.addCustomIconMenu(`${this._ext.path}/icons/logo.png`, "Menu principal");
         let programDir = GLib.build_filenamev([this._ext.path, 'System', 'Program']);
         let [res, out] = GLib.spawn_command_line_sync('uname -m');
@@ -153,6 +152,7 @@ class MyDock {
 
         this._initMediaTracker();
         this._initAppTracker()
+        this._initSleepTracker();
     }
 
     _initMediaTracker() {
@@ -193,6 +193,57 @@ class MyDock {
         if (playerName) {
             this._connectToPlayer(playerName);
         }
+    }
+
+    _initSleepTracker() {
+        try {
+            let bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
+            this._sleepSignalId = bus.signal_subscribe(
+                'org.freedesktop.login1',
+                'org.freedesktop.login1.Manager',
+                'PrepareForSleep',
+                '/org/freedesktop/login1',
+                null,
+                Gio.DBusSignalFlags.NONE,
+                (connection, sender, path, iface, signal, params) => {
+                    let [goingToSleep] = params.deep_unpack();
+                    if (!goingToSleep) {
+                        GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+                            this._refreshRunningApps();
+                            return GLib.SOURCE_REMOVE;
+                        });
+                    }
+                }
+            );
+        } catch (e) {
+            log(`[PrismUI] Impossible de suivre la mise en veille : ${e.message}`);
+        }
+    }
+
+    _refreshRunningApps() {
+        if (!this.container) return;
+
+        let pinnedApps = this.settings.get_strv('dock-apps') || [];
+        let runningApps = this._appSystem.get_running();
+        let runningIds = runningApps.map(app => app.get_id());
+
+        let children = [...this.container.get_children()];
+        for (let child of children) {
+            if (child._appId && !child._isPinned && !runningIds.includes(child._appId)) {
+                if (!child._mediaBox || !child._mediaBox.visible) {
+                    child.destroy();
+                }
+            }
+        }
+
+        for (let app of runningApps) {
+            let appId = app.get_id();
+            if (!pinnedApps.includes(appId) && !this._findIconByAppId(appId)) {
+                this.addAppIcon(appId, false);
+            }
+        }
+
+        this._updateSeparatorVisibility();
     }
 
     _connectToPlayer(playerName) {
@@ -392,11 +443,8 @@ class MyDock {
         let centerX = iconX + (iconWidth / 2);
         let topY = iconY - 10;
         
-        // Création du menu
         this.customDockMenu = new CustomPopup(centerX, topY, sourceActor);
 
-        // --- LA CORRECTION EST ICI ---
-        // On écoute la destruction de l'acteur visuel pour réinitialiser la variable globale
         this.customDockMenu.actor.connect('destroy', () => {
             this.customDockMenu = null;
         });
@@ -589,7 +637,6 @@ class MyDock {
             height: targetHeight 
         });
 
-        // --- COLONNE GAUCHE (Toutes les applications) ---
         let leftCol = new St.BoxLayout({ vertical: true, width: 350, style: 'margin-right: 20px;' });
         leftCol.add_child(new St.Label({ text: "Logiciels disponibles", style: 'font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #81D4FA;' }));
         
@@ -598,7 +645,6 @@ class MyDock {
         leftScroll.set_child(this._systemAppList);
         leftCol.add_child(leftScroll);
 
-        // --- COLONNE DROITE (Ton Dock) ---
         let rightCol = new St.BoxLayout({ vertical: true, width: 350 });
         rightCol.add_child(new St.Label({ text: "Dans le Dock", style: 'font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #A5D6A7;' }));
         
@@ -622,15 +668,13 @@ class MyDock {
             key: Clutter.KEY_Escape
         });
 
-        // 1. On ouvre la boîte de dialogue IMMÉDIATEMENT (zéro freeze)
         this.appManagerDialog.open();
 
         this.appManagerDialog.connect('closed', () => {
             this.appManagerDialog = null;
-            this._cachedAllApps = null; // On vide le cache massif
+            this._cachedAllApps = null;
         });
 
-        // 2. On charge le contenu de manière asynchrone à la frame suivante
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._refreshAppManagerUI();
             return GLib.SOURCE_REMOVE;
@@ -646,7 +690,6 @@ class MyDock {
         let dockAppsIds = this.settings.get_strv('dock-apps') || [];
         let allApps = this._cachedAllApps || [];
 
-        // 1. Remplir la colonne de DROITE (Dock)
         for (let i = 0; i < dockAppsIds.length; i++) {
             let appId = dockAppsIds[i];
             let appInfo = Gio.DesktopAppInfo.new(appId);
@@ -695,7 +738,6 @@ class MyDock {
             this._dockAppList.add_child(row);
         }
 
-        // 2. Remplir la colonne de GAUCHE (Système)
         for (let app of allApps) {
             let appId = app.get_id();
             if (dockAppsIds.includes(appId)) continue; 
@@ -734,7 +776,6 @@ class MyDock {
         let apps = this.settings.get_strv('dock-apps') || [];
         if (index + direction < 0 || index + direction >= apps.length) return;
 
-        // On échange les deux applications dans le tableau
         let temp = apps[index];
         apps[index] = apps[index + direction];
         apps[index + direction] = temp;
@@ -745,18 +786,14 @@ class MyDock {
     }
 
     _reloadDockIcons() {
-        // On détruit toutes les icônes actuelles du dock sauf les éléments fixes
         let children = this.container.get_children();
         for (let child of children) {
-            // On ne détruit pas le séparateur
             if (child === this._separator) continue;
-            // On ne détruit pas le menu principal et desktools (qui n'ont pas d'_appId)
             if (child._appId) {
                 child.destroy();
             }
         }
 
-        // On recrée les icônes dans le nouvel ordre
         let apps = this.settings.get_strv('dock-apps') || [];
         for (let desktop of apps) {
             this.addAppIcon(desktop, true);
@@ -956,7 +993,6 @@ class MyDock {
             }
         });
 
-        // On s'assure que l'icône nettoie son propre timer quand on la supprime du dock
         icon.connect('destroy', () => {
             icon._prismDestroyed = true;
             icon._dotContainer = null;
@@ -992,21 +1028,18 @@ class MyDock {
     }
 
     _showWindowSelectMenu(sourceActor, windows, appInfo) {
-        // 1. Nettoyage de l'ancien menu
         if (this._customWindowMenu) {
             this._customWindowMenu.destroy();
             this._customWindowMenu = null;
         }
 
-        // 2. Création de notre propre boîte de menu
         this._customWindowMenu = new St.BoxLayout({
             vertical: true,
-            style_class: 'prism-window-menu', // À styliser dans ton CSS
+            style_class: 'prism-window-menu',
             style: 'background-color: rgba(30, 30, 30, 0.95);; border-radius: 8px; padding: 5px; border: 1px solid rgba(255,255,255,0.1);',
             reactive: true
         });
 
-        // 3. Remplissage avec des boutons propres (sans indentation forcée)
         windows.forEach(win => {
             let title = win.get_title() || appInfo.get_name();
             if (title.length > 40) title = title.substring(0, 37) + '...';
@@ -1019,7 +1052,6 @@ class MyDock {
                 track_hover: true
             });
 
-            // Effet visuel au survol (hover)
             btn.connect('notify::hover', () => {
                 btn.style = btn.hover ? 'padding: 8px 12px; color: white; text-align: left; border-radius: 4px; background-color: rgba(255,255,255,0.1);' 
                                       : 'padding: 8px 12px; color: white; text-align: left; border-radius: 4px;';
@@ -1034,7 +1066,6 @@ class MyDock {
             this._customWindowMenu.add_child(btn);
         });
 
-        // 4. Ajouter le bouton "Nouvelle fenêtre"
         let newBtn = new St.Button({
             child: new St.Label({ text: "Nouvelle fenêtre" }),
             style: 'padding: 8px 12px; color: #ffffff; text-align: center; font-weight: bold; margin-top: 4px;',
@@ -1047,26 +1078,22 @@ class MyDock {
         });
         this._customWindowMenu.add_child(newBtn);
 
-        // 5. Positionnement manuel au-dessus de l'icône cliquée
         Main.layoutManager.addChrome(this._customWindowMenu);
         
         let [iconX, iconY] = sourceActor.get_transformed_position();
         let [iconWidth, iconHeight] = sourceActor.get_transformed_size();
         
-        // On force un calcul de taille pour bien positionner
         this._customWindowMenu.clutter_text_direction = Clutter.TextDirection.LTR;
         this._customWindowMenu.queue_relayout();
         
-        // Petit délai pour laisser le layout se calculer, puis on place le menu
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._customWindowMenu) {
                 let menuWidth = this._customWindowMenu.width;
                 let menuHeight = this._customWindowMenu.height;
                 
-                // Centré horizontalement par rapport à l'icône, et juste au-dessus
                 this._customWindowMenu.set_position(
                     iconX + (iconWidth / 2) - (menuWidth / 2),
-                    iconY - menuHeight - 20 // 10px de marge au-dessus du dock
+                    iconY - menuHeight - 20 
                 );
             }
             return GLib.SOURCE_REMOVE;
@@ -1090,12 +1117,11 @@ class MyDock {
 
     _closeWindowSelectMenu() {
         if (this._customWindowMenu) {
-            Main.layoutManager.removeChrome(this._customWindowMenu); // <-- AJOUT ICI
+            Main.layoutManager.removeChrome(this._customWindowMenu); 
             this._customWindowMenu.destroy();
             this._customWindowMenu = null;
         }
         
-        // On débranche l'écouteur global pour ne pas faire ralentir le système
         if (this._stageEventId) {
             global.stage.disconnect(this._stageEventId);
             this._stageEventId = null;
@@ -1573,7 +1599,6 @@ class MyDock {
         scroll.set_child(list);
         mainBox.add_child(scroll);
 
-        // Remplacement de Me.dir.get_path()
         let extDir = this._ext.path;
         let programDir = GLib.build_filenamev([extDir, 'System', 'Program']);
         
@@ -1583,11 +1608,31 @@ class MyDock {
         // Parcourir le registre pour générer la liste
         for (let id in PRISM_APPS) {
             let app = PRISM_APPS[id];
-            let fileName = app.getFileName(arch, app.version);
-            let filePath = GLib.build_filenamev([programDir, fileName]);
+            let targetFileName = app.getFileName(arch, app.version);
+            let targetFilePath = GLib.build_filenamev([programDir, targetFileName]);
             
-            // Vérifier si l'AppImage est présente sur le disque
-            let isInstalled = Gio.File.new_for_path(filePath).query_exists(null);
+            let isExactInstalled = Gio.File.new_for_path(targetFilePath).query_exists(null);
+            let isInstalledAnyVersion = false;
+            let oldFilePath = null;
+
+            let dir = Gio.File.new_for_path(programDir);
+            if (dir.query_exists(null)) {
+                let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                while (true) {
+                    let info = enumerator.next_file(null);
+                    if (!info) break;
+                    let name = info.get_name();
+                    // On vérifie si le fichier correspond à l'application (ex: commence par desktools)
+                    if (name.toLowerCase().includes(id.toLowerCase()) && name.endsWith('.AppImage')) {
+                        isInstalledAnyVersion = true;
+                        let fullPath = GLib.build_filenamev([programDir, name]);
+                        if (name !== targetFileName) {
+                            oldFilePath = fullPath;
+                        }
+                        break;
+                    }
+                }
+            }
 
             let row = new St.BoxLayout({ 
                 vertical: false, 
@@ -1609,7 +1654,7 @@ class MyDock {
             
             let btnBox = new St.BoxLayout({ y_align: Clutter.ActorAlign.CENTER });
             
-            if (isInstalled) {
+            if (isExactInstalled) {
                 let removeBtn = new St.Button({ 
                     child: new St.Label({ text: "Désinstaller" }), 
                     style_class: 'prism-widget-menu-btn', 
@@ -1617,11 +1662,24 @@ class MyDock {
                     reactive: true 
                 });
                 removeBtn.connect('clicked', () => {
-                    Gio.File.new_for_path(filePath).delete(null);
+                    Gio.File.new_for_path(targetFilePath).delete(null);
                     _registerPrismApps(this._ext); 
                     this.storeDialog.close();
                 });
                 btnBox.add_child(removeBtn);
+            } else if (oldFilePath) {
+                let updateBtn = new St.Button({ 
+                    child: new St.Label({ text: "Mettre à jour" }), 
+                    style_class: 'prism-widget-menu-btn', 
+                    style: 'padding: 8px 15px; color: #FFB74D; font-weight: bold;', 
+                    reactive: true 
+                });
+                updateBtn.connect('clicked', () => {
+                    this.storeDialog.close();
+                    try { Gio.File.new_for_path(oldFilePath).delete(null); } catch(e) {}
+                    this._confirmDownload(id);
+                });
+                btnBox.add_child(updateBtn);
             } else {
                 let installBtn = new St.Button({ 
                     child: new St.Label({ text: "Installer" }), 
@@ -1631,7 +1689,6 @@ class MyDock {
                 });
                 installBtn.connect('clicked', () => {
                     this.storeDialog.close();
-                    // On appelle la nouvelle fonction de confirmation
                     this._confirmDownload(id); 
                 });
                 btnBox.add_child(installBtn);
@@ -1680,13 +1737,11 @@ class MyDock {
             key: Clutter.KEY_Escape
         });
 
-        // Le bouton est désactivé le temps qu'on récupère la taille
         let validateBtn = confirmDialog.addButton({
             label: 'Autoriser et Installer',
             action: () => {
                 confirmDialog.close();
                 _launchOrDownloadApp(this._ext, appId);
-                // On met à jour le dock pour potentiellement afficher l'icône fraîchement installée
                 if (appId === 'desktools') {
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
                         this._reloadDockIcons();
@@ -1700,7 +1755,6 @@ class MyDock {
 
         confirmDialog.open();
 
-        // Récupération asynchrone de la taille (Requête HEAD)
         let session = new Soup.Session();
         let message = Soup.Message.new('HEAD', downloadUrl);
         
@@ -1744,6 +1798,14 @@ class MyDock {
 
     destroy() {
     this._closeWindowSelectMenu();
+
+    if (this._sleepSignalId) {
+        try {
+            let bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
+            bus.signal_unsubscribe(this._sleepSignalId);
+        } catch (e) {}
+        this._sleepSignalId = 0;
+    }
 
     if (this._progressTimerId) {
         GLib.Source.remove(this._progressTimerId);
@@ -1825,10 +1887,9 @@ class MyDock {
 
 class NetworkSetting {
     constructor(ext) {
-        this._ext = ext; // On sauvegarde l'instance de l'extension
+        this._ext = ext;
         this._signalConnections = [];
         this._initTimeout = 0;
-        // On utilise le chemin natif de l'extension
         this._iconsPath = `${this._ext.path}/icons/interface/wthicon`;
 
         this.container = new St.BoxLayout({
@@ -1892,7 +1953,7 @@ class NetworkSetting {
         try {
             let path = `${this._iconsPath}/${iconName}`;
             let file = Gio.File.new_for_path(path);
-            iconActor.gicon = new Gio.FileIcon({ file: file }); // Plus de query_exists bloquant !
+            iconActor.gicon = new Gio.FileIcon({ file: file }); 
         } catch (e) {}
     }
 
@@ -2140,7 +2201,6 @@ class NetworkSetting {
 
         let monitorIndex = window.get_monitor();
         
-        // 1. Obtenir la zone de travail réelle (exclut proprement la barre supérieure GNOME)
         let workspace = global.workspace_manager.get_active_workspace();
         let workArea = workspace.get_work_area_for_monitor(monitorIndex);
         
@@ -2151,7 +2211,6 @@ class NetworkSetting {
         let newWidth = workArea.width;
         let newHeight = workArea.height - dockHeight;
 
-        // 2. Isoler la logique de redimensionnement et le gestionnaire d'effets dans un bloc sécurisé
         const applyGeometry = () => {
             window.move_resize_frame(true, newX, newY, newWidth, newHeight);
             
@@ -2159,22 +2218,19 @@ class NetworkSetting {
                 try {
                     global.windowEffectManager.applyClip(window);
                 } catch (e) {
-                    // Ignore l'erreur silencieusement si la fenêtre n'est pas prête pour l'effet
+                    log(`Erreur lors de l'application du clip à la fenêtre : ${e.message}`);
                 }
             }
         };
 
-        // 3. Gestion asynchrone pour Wayland
         if (window.maximized_vertically || window.maximized_horizontally) { 
             window.unmaximize(Meta.MaximizeFlags.BOTH);
             
-            // On laisse GNOME traiter l'unmaximize avant d'appliquer les nouvelles coordonnées
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 applyGeometry();
                 return GLib.SOURCE_REMOVE;
             });
         } else {
-            // Si elle n'était pas maximisée, on peut redimensionner directement
             applyGeometry();
         }
     }
@@ -2256,7 +2312,6 @@ class NetworkSetting {
                 reactive: true
             });
     
-            // Remplacement de ExtensionUtils par this._ext.path
             let iconPathOn = `${this._ext.path}/icons/interface/toggle/toggle-button-on.png`;
             let iconPathOff = `${this._ext.path}/icons/interface/toggle/toggle-button-off.png`;
     
@@ -2314,7 +2369,6 @@ class NetworkSetting {
     }
 
     _handleBarClick() {
-        // Si le menu existe déjà et est affiché, on le ferme (Toggle OFF)
         if (menunet) {
             this._closeAllMenus();
             return null;
@@ -2353,7 +2407,7 @@ class NetworkSetting {
                 name: 'tgl-row', 
                 style_class: 'toggle-row',
                 x_expand: true,
-                x_align: Clutter.ActorAlign.START // Force l'alignement à gauche
+                x_align: Clutter.ActorAlign.START
             });
             
             let icon = new St.Icon({ icon_name: iconName, icon_size: 18, style_class: 'toggle-icon' });
@@ -2387,10 +2441,8 @@ class NetworkSetting {
 
         wifiBtn.connect('clicked', () => {
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                // On ferme le menu réseau proprement
                 this._closeAllMenus();
                 
-                // On affiche la notification IUI
                 if (global.notificationManager) {
                     global.notificationManager.showNotification(
                         "Wi-Fi", 
@@ -2405,10 +2457,8 @@ class NetworkSetting {
 
         bleBtn.connect('clicked', () => {
             GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                // On ferme le menu réseau proprement
                 this._closeAllMenus();
                 
-                // On affiche la notification IUI
                 if (global.notificationManager) {
                     global.notificationManager.showNotification(
                         "Bluetooth", 
@@ -2427,8 +2477,7 @@ class NetworkSetting {
                     Accesmenu.destroy();
                     Accesmenu = null;
                 } else {
-                    this._closeAllMenus(); // <-- ON FERME TOUT EN PREMIER (sans crasher)
-                    // On lance la création asynchrone du nouveau menu
+                    this._closeAllMenus();
                     this._accessibilityMenu().then(m => Accesmenu = m).catch(e => log(e));
                 }
                 return GLib.SOURCE_REMOVE;
@@ -2465,11 +2514,8 @@ class NetworkSetting {
         brightBox.add_child(brightLabel);
         brightBox.add_child(brightSlider);
 
-        // Par défaut, on le cache pour éviter qu'il n'apparaisse par theoric error
         brightBox.hide();
 
-        // On pré-interroge le proxy de manière synchrone/instantanée si possible, 
-        // ou on configure la liaison D-Bus pour qu'elle applique l'état avant l'affichage final.
         Gio.DBusProxy.new_for_bus(
             Gio.BusType.SESSION,
             Gio.DBusProxyFlags.NONE,
@@ -2483,21 +2529,40 @@ class NetworkSetting {
                     let brightnessProxy = Gio.DBusProxy.new_for_bus_finish(result);
                     
                     if (brightnessProxy && brightnessProxy.get_name_owner() && menunet) {
-                        // <-- AJOUT : On sauvegarde le proxy et l'ID du signal dans menunet
                         menunet._brightnessProxy = brightnessProxy; 
 
                         let currentBrightness = brightnessProxy.get_cached_property("Brightness");
                         
                         if (currentBrightness) {
+                            let updatingFromSignal = false;
                             brightSlider.value = currentBrightness.unpack() / 100;
                             brightBox.show();
                             
-                            // ... (code du brightSlider.connect reste identique)
+                            brightSlider.connect('notify::value', () => {
+                                if (updatingFromSignal) return;
+                                let val = Math.round(brightSlider.value * 100);
+                                try {
+                                    brightnessProxy.call(
+                                        'org.freedesktop.DBus.Properties.Set',
+                                        new GLib.Variant('(ssv)', ['org.gnome.SettingsDaemon.Power.Screen', 'Brightness', new GLib.Variant('i', val)]),
+                                        null,
+                                        Gio.DBusCallFlags.NONE,
+                                        -1,
+                                        null,
+                                        null
+                                    );
+                                } catch (e) {
+                                    log(`[PrismUI] Erreur modification luminosité : ${e.message}`);
+                                }
+                            });
                             
-                            // <-- AJOUT : Sauvegarde de l'ID pour le détruire plus tard
                             menunet._brightSignalId = brightnessProxy.connect('g-properties-changed', (proxy, changed) => {
                                 let b = changed.lookup_value('Brightness', null);
-                                if (b) brightSlider.value = b.unpack() / 100;
+                                if (b) {
+                                    updatingFromSignal = true;
+                                    brightSlider.value = b.unpack() / 100;
+                                    updatingFromSignal = false;
+                                }
                             });
                         }
                     }
@@ -2558,7 +2623,6 @@ class NetworkSetting {
                 let target = event.get_source();
                 
                 try {
-                    // Sécurité : vérifier que les acteurs existent avant de faire un .contains()
                     if (!menunet || !this.container) {
                         return Clutter.EVENT_PROPAGATE;
                     }
@@ -2573,7 +2637,6 @@ class NetworkSetting {
                     
                     this._closeAllMenus();
                 } catch (e) {
-                    // Ignore les erreurs si un objet a déjà été détruit entre-temps
                 }
             }
             return Clutter.EVENT_PROPAGATE;
@@ -2663,10 +2726,8 @@ class CustomPopup {
 
         Main.layoutManager.addChrome(this.actor);
 
-        // --- AJOUT : Empêcher les clics de traverser le fond du menu ---
         this.actor.connect('button-press-event', () => Clutter.EVENT_STOP);
         this.actor.connect('touch-event', () => Clutter.EVENT_STOP);
-        // ----------------------------------------------------------------
     }
 
     addItem(labelText, callback, iconName = null) {
@@ -2674,7 +2735,7 @@ class CustomPopup {
             style_class: 'popup-menu-item',
             reactive: true,
             x_expand: true,
-            x_align: Clutter.ActorAlign.FILL, // Force le bouton à prendre toute la largeur du menu
+            x_align: Clutter.ActorAlign.FILL,
             y_align: Clutter.ActorAlign.CENTER,
             can_focus: true,
             track_hover: true
@@ -2685,7 +2746,7 @@ class CustomPopup {
             vertical: false, 
             style: 'padding: 8px;',
             x_expand: true,
-            x_align: Clutter.ActorAlign.START // Maintient l'icône et le texte à gauche
+            x_align: Clutter.ActorAlign.START
         });
         
         if (iconName) {
@@ -2757,12 +2818,10 @@ class CustomPopup {
                         return px >= ax && px <= ax + aw && py >= ay && py <= ay + ah;
                     };
 
-                    // Si le clic est dans le menu OU sur l'icône source, on laisse l'événement se propager aux boutons !
                     if (isInside(this.actor, mouseX, mouseY) || isInside(this._sourceActor, mouseX, mouseY)) {
                         return Clutter.EVENT_PROPAGATE;
                     }
 
-                    // Sinon, on ferme le menu
                     this.destroy();
                     return Clutter.EVENT_STOP;
                 }
@@ -2997,79 +3056,158 @@ function _launchOrDownloadApp(ext, appId) {
     let arch = new TextDecoder().decode(out).trim();
 
     let fileName = appConfig.getFileName(arch, appConfig.version);
-    // Utilisation de ext.path
     let programDir = GLib.build_filenamev([ext.path, 'System', 'Program']);
     let appImagePath = GLib.build_filenamev([programDir, fileName]);
     
     let file = Gio.File.new_for_path(appImagePath);
     let isJavaScript = fileName.toLowerCase().endsWith('.js');
-    let launchCommand = isJavaScript
-        ? `gjs "${appImagePath}"`
-        : `"${appImagePath}"`;
+    let launchCommand = isJavaScript ? ['gjs', appImagePath] : [appImagePath];
 
-    // Lancement direct si déjà installé
-    if (file.query_exists(null)) {
-        try {
-            if (isJavaScript) {
-                Gio.Subprocess.new(['gjs', appImagePath], Gio.SubprocessFlags.NONE);
-            } else {
-                Gio.Subprocess.new([appImagePath], Gio.SubprocessFlags.NONE);
+    let checkAndLaunch = () => {
+        if (!isJavaScript) {
+            let isFuseInstalled = false;
+            try {
+                let [checkRes, checkOut] = GLib.spawn_command_line_sync('/usr/sbin/ldconfig -p');
+                let libOutput = checkRes ? new TextDecoder().decode(checkOut) : '';
+                isFuseInstalled = libOutput.includes('libfuse.so.2');
+            } catch (e) {}
+
+            if (!isFuseInstalled) {
+                let fusePaths = [
+                    '/lib/x86_64-linux-gnu/libfuse.so.2', 
+                    '/usr/lib/x86_64-linux-gnu/libfuse.so.2', 
+                    '/lib/libfuse.so.2', 
+                    '/usr/lib/libfuse.so.2',
+                    '/lib64/libfuse.so.2'
+                ];
+                isFuseInstalled = fusePaths.some(p => Gio.File.new_for_path(p).query_exists(null));
             }
+
+            if (!isFuseInstalled) {
+                let dialog = new ModalDialog.ModalDialog({ destroyOnClose: true });
+                
+                let mainBox = new St.BoxLayout({ vertical: true, style: 'padding: 20px;' });
+                let title = new St.Label({ text: "Dépendance requise : FUSE", style: 'font-weight: bold; font-size: 18px; margin-bottom: 10px; color: #ffffff;' });
+                let msg = new St.Label({ 
+                    text: `L'application "${appConfig.name}" est au format AppImage et nécessite la bibliothèque 'libfuse2' pour s'exécuter.\n\nVoulez-vous l'installer maintenant ?\n\nCommande : pkexec apt install -y libfuse2`,
+                    style: 'max-width: 420px; color: #ccc; line-height: 1.4;' 
+                });
+                msg.clutter_text.set_line_wrap(true);
+                
+                mainBox.add_child(title);
+                mainBox.add_child(msg);
+                dialog.contentLayout.add_child(mainBox);
+
+                dialog.addButton({
+                    label: 'Annuler',
+                    action: () => {
+                        dialog.close();
+                        try { file.delete(null); } catch(e) {}
+                        Main.notify("PrismUI", "Installation annulée (AppImage supprimé).");
+                    },
+                    key: Clutter.KEY_Escape
+                });
+
+                dialog.addButton({
+                    label: 'Installer libfuse2',
+                    action: () => {
+                        dialog.close();
+                        Main.notify("PrismUI", "Installation de libfuse2 en cours...");
+                        
+                        try {
+                            let proc = Gio.Subprocess.new(['pkexec', 'apt', 'install', '-y', 'libfuse2'], Gio.SubprocessFlags.NONE);
+                            proc.wait_check_async(null, (obj, res) => {
+                                try {
+                                    obj.wait_check_finish(res);
+                                    Main.notify("PrismUI", "libfuse2 installé avec succès !");
+                                    _registerPrismApps(ext);
+                                    Gio.Subprocess.new(launchCommand, Gio.SubprocessFlags.NONE);
+                                } catch (err) {
+                                    try { file.delete(null); } catch(e) {}
+                                    Main.notify("PrismUI - Erreur", "Échec des privilèges. AppImage supprimé.");
+                                }
+                            });
+                        } catch (err) {
+                            log(`[PrismUI] Erreur pkexec: ${err.message}`);
+                        }
+                    }
+                });
+
+                dialog.open();
+                return;
+            }
+        }
+
+        _registerPrismApps(ext);
+        try {
+            Gio.Subprocess.new(launchCommand, Gio.SubprocessFlags.NONE);
         } catch (e) {
             log(`[PrismUI] Échec du lancement de ${appConfig.name} : ${e.message}`);
         }
+    };
+
+    if (file.query_exists(null)) {
+        checkAndLaunch();
         return;
     }
 
-    // Téléchargement si non installé
-    let downloadUrl = `https://github.com/${appConfig.repo}/releases/download/${appConfig.tag}/${fileName}`;
-    Main.notify("PrismUI", `Installation de ${appConfig.name} ${appConfig.version}...`);
+    let progressDialog = new ModalDialog.ModalDialog({ destroyOnClose: false });
+    let progressBox = new St.BoxLayout({ vertical: true, style: 'padding: 20px; min-width: 320px;' });
+    let progressTitle = new St.Label({ text: `Téléchargement de ${appConfig.name}`, style: 'font-weight: bold; font-size: 16px; margin-bottom: 15px; color: #ffffff;' });
+    let statusLabel = new St.Label({ text: "Connexion au serveur GitHub...", style: 'margin-bottom: 10px; color: #ccc;' });
 
+    progressBox.add_child(progressTitle);
+    progressBox.add_child(statusLabel);
+    progressDialog.contentLayout.add_child(progressBox);
+    progressDialog.open();
+
+    let downloadUrl = `https://github.com/${appConfig.repo}/releases/download/${appConfig.tag}/${fileName}`;
     let dirFile = Gio.File.new_for_path(programDir);
     if (!dirFile.query_exists(null)) {
         dirFile.make_directory_with_parents(null);
     }
 
-    let cmd = `wget -qO "${appImagePath}" "${downloadUrl}" && chmod +x "${appImagePath}" && ${launchCommand}`;
+    let session = new Soup.Session();
+    let message = Soup.Message.new('GET', downloadUrl);
 
-    try {
-        let proc = Gio.Subprocess.new(
-            ['bash', '-c', cmd],
-            Gio.SubprocessFlags.NONE
-        );
-        
-        proc.wait_check_async(null, (obj, res) => {
-            try {
-                obj.wait_check_finish(res);
-                Main.notify("PrismUI", `${appConfig.name} installé et lancé avec succès !`);
-                
-                _registerPrismApps(ext);
-                
-            } catch (e) {
-                log(`[PrismUI] Échec du téléchargement wget pour ${appConfig.name} : ${e.message}`);
-                Main.notify("PrismUI - Erreur", `Impossible de récupérer ${appConfig.name}.`);
+    session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
+        try {
+            let bytes = sess.send_and_read_finish(result);
+            let status = message.get_status();
+            
+            if (status !== 200) {
+                throw new Error(`Erreur serveur HTTP ${status}`);
             }
-        });
-    } catch (e) {
-        log(`[PrismUI] Échec du lancement de la commande bash : ${e.message}`);
-    }
+
+            statusLabel.set_text("Écriture du fichier sur le disque...");
+
+            file.replace_contents(bytes.get_data(), null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
+            GLib.spawn_command_line_sync(`chmod +x "${appImagePath}"`);
+
+            progressDialog.close();
+
+            Main.notify("PrismUI", `${appConfig.name} téléchargé avec succès !`);
+            checkAndLaunch();
+
+        } catch (e) {
+            progressDialog.close();
+            log(`[PrismUI] Échec du téléchargement pour ${appConfig.name} : ${e.message}`);
+            Main.notify("PrismUI - Erreur", `Impossible de récupérer ${appConfig.name}.`);
+        }
+    });
 }
 
 function _registerPrismApps(ext) {
     let appsDir = GLib.build_filenamev([GLib.get_home_dir(), '.local', 'share', 'applications']);
-    // Utilisation de ext.path
     let extDir = ext.path;
     let programDir = GLib.build_filenamev([extDir, 'System', 'Program']);
     
-    // Récupérer l'architecture pour adapter le nom du fichier
     let [res, out] = GLib.spawn_command_line_sync('uname -m');
     let arch = new TextDecoder().decode(out).trim();
 
-    // S'assurer que les dossiers existent
     GLib.mkdir_with_parents(appsDir, 0o755);
     GLib.mkdir_with_parents(programDir, 0o755);
 
-    // Boucler sur notre fameux registre d'applications
     for (let id in PRISM_APPS) {
         let app = PRISM_APPS[id];
         let fileName = app.getFileName(arch, app.version);
@@ -3111,19 +3249,16 @@ Terminal=false
             let file = Gio.File.new_for_path(desktopFilePath);
             let needsUpdate = true;
 
-            // 1. Si le fichier existe, on compare son contenu
             if (file.query_exists(null)) {
                 let [ok, contents] = file.load_contents(null);
                 if (ok) {
                     let currentContent = new TextDecoder("utf-8").decode(contents);
-                    // Si le contenu est strictement identique, on annule l'écriture
                     if (currentContent === desktopContent) {
                         needsUpdate = false;
                     }
                 }
             }
 
-            // 2. On écrit uniquement si c'est nouveau ou si la version a changé
             if (needsUpdate) {
                 file.replace_contents(desktopContent, null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null);
             }
@@ -3139,9 +3274,6 @@ export default class PrismExtension extends Extension {
     }
 
     enable() {
-        // Remplace l'ancienne fonction enable()
-        // Note: Tu peux utiliser this.path pour récupérer le chemin de ton extension (équivalent de Me.path)
-
         this._stylesheet = this.dir.get_child('stylesheet.css');
         this._theme = St.ThemeContext.get_for_stage(global.stage).get_theme();
         this._theme.load_stylesheet(this._stylesheet);
@@ -3153,7 +3285,6 @@ export default class PrismExtension extends Extension {
         if (!global.prismWidgets) global.prismWidgets = new PrismWidgets();
 
         let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
-        // Utilise this.dir.get_child('...').get_path() pour cibler les fichiers de ton extension
         let wallpaperPath = this.dir.get_child('icons').get_child('interface').get_child('wallpaper').get_child('officiel-wallpaper-prismUI.png').get_path();
         let wallpaperUri = GLib.filename_to_uri(wallpaperPath, null);
         this._originalWallpaperUri = backgroundSettings.get_string('picture-uri');
@@ -3167,7 +3298,6 @@ export default class PrismExtension extends Extension {
     }
 
     disable() {
-        // Remplace l'ancienne fonction disable() et nettoie tout proprement
         if (this._theme && this._stylesheet) {
             this._theme.unload_stylesheet(this._stylesheet);
             this._theme = null;

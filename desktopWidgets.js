@@ -272,14 +272,12 @@ const BUILTIN_WIDGETS = [
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
                 { type: 'label', text: 'Crypto (EUR)', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px;' },
-                // Police monospace pour que les chiffres soient bien alignés
                 { type: 'label', id: 'btc-price', text: 'BTC : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace; margin-bottom: 4px;' },
                 { type: 'label', id: 'eth-price', text: 'ETH : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace;' }
             ]
         },
         bindings: [
             {
-                // Intervalle court : 60 secondes
                 targetId: "btc-price", targetProp: "text", interval: 60,
                 sourceType: "http", 
                 source: "https://api.binance.com/api/v3/ticker/price?symbol=BTCEUR",
@@ -318,7 +316,6 @@ const BUILTIN_WIDGETS = [
         },
         bindings: [
             {
-                // Les monnaies bougent lentement, on actualise toutes les heures (3600 secondes)
                 targetId: "eur-usd", targetProp: "text", interval: 3600,
                 sourceType: "http", 
                 source: "https://api.exchangerate-api.com/v4/latest/EUR",
@@ -356,7 +353,6 @@ const BUILTIN_WIDGETS = [
         },
         bindings: [
             {
-                // Vérifie l'IP publique toutes les 5 minutes
                 targetId: "public-ip", targetProp: "text", interval: 300,
                 sourceType: "http", 
                 source: "https://api.ipify.org?format=json",
@@ -511,7 +507,6 @@ export class PrismWidgets {
                 let clickedInsideWidgetOrControl = false;
                 for (let w of this._widgets) {
                     if (!w) continue;
-                    // Vérifie si le clic est sur le widget ou sur l'un de ses boutons d'édition
                     if (isInside(w, mouseX, mouseY) || 
                        (w._deleteBtn && isInside(w._deleteBtn, mouseX, mouseY)) || 
                        (w._editBtn && isInside(w._editBtn, mouseX, mouseY))) {
@@ -530,14 +525,12 @@ export class PrismWidgets {
     }
 
     _buildWidgetMenu() {
-        // 1. On crée un gestionnaire de grille (FlowLayout)
         let flowLayout = new Clutter.FlowLayout({ 
             orientation: Clutter.Orientation.HORIZONTAL,
-            column_spacing: 15, // Espace horizontal entre les boutons
-            row_spacing: 15     // Espace vertical entre les lignes
+            column_spacing: 15,
+            row_spacing: 15
         });
 
-        // 2. On l'applique à un St.Widget générique (au lieu d'un BoxLayout)
         this.menuContainer = new St.Widget({
             name: 'prism-widget-menu', 
             style_class: 'prism-widget-menu',
@@ -545,7 +538,6 @@ export class PrismWidgets {
             reactive: true
         });
 
-        // 3. On ajoute les boutons comme avant
         for (let manifest of BUILTIN_WIDGETS) {
             let btn = this._createDraggableMenuItem(manifest.name, manifest, () => this._buildWidgetFromManifest(manifest));
             this.menuContainer.add_child(btn);
@@ -561,19 +553,15 @@ export class PrismWidgets {
         if (this._menuOpen) {
             let monitor = Main.layoutManager.primaryMonitor;
             
-            // 1. On limite la largeur maximale du menu à 80% de l'écran
-            // C'est ce qui force les éléments à passer à la ligne !
             let maxWidth = monitor.width * 0.8;
             this.menuContainer.set_width(maxWidth);
 
-            // 2. Magie de GNOME : On lui demande "Avec cette largeur, quelle hauteur te faut-il ?"
             let [minHeight, natHeight] = this.menuContainer.get_preferred_height(maxWidth);
             this.menuContainer.set_height(natHeight);
 
-            // 3. On centre le menu en bas, en prenant en compte sa nouvelle hauteur dynamique
             this.menuContainer.set_position(
                 (monitor.width - maxWidth) / 2, 
-                monitor.height - natHeight - 100 // 100px de marge avec le bas de l'écran
+                monitor.height - natHeight - 100 
             );
 
             this.menuContainer.show();
