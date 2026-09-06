@@ -72,7 +72,7 @@ const PRISM_APPS = {
 };
 
 let searchBar, pollingId, homeBar, previousWindow, notificationManager, originalWallpaperUri, myDock, menu, networkSetting, menunet, Volmenu, Accesmenu, superBlock, closeOverviewTimeout, monitor;
-
+let _isPC = false;
 
 class MyDock {
     constructor(ext) {
@@ -1908,7 +1908,8 @@ class NetworkSetting {
         this._soundIcon = soundObj.icon;
         this.container.add_child(this.soundButton);
 
-        let batObj = this.createDynamicButton('battery-fullwth.png', 'battery');
+        let defaultBatIcon = _isPC ? 'powerwth.png' : 'battery-fullwth.png';
+        let batObj = this.createDynamicButton(defaultBatIcon, 'battery');
         this.batteryButton = batObj.button;
         this._batteryIcon = batObj.icon;
         this.container.add_child(this.batteryButton);
@@ -1967,6 +1968,7 @@ class NetworkSetting {
         }
 
         if (type === 'battery') {
+            if (_isPC) return 'Eteindre le PC';
             let device = this._upClient ? this._upClient.get_display_device() : null;
             if (!device) return 'Batterie indisponible';
             let status = device.state === UPowerGlib.DeviceState.CHARGING ? 'En charge' : 'Sur batterie';
@@ -2139,6 +2141,11 @@ class NetworkSetting {
     }
 
     _updateBatteryIcon(device) {
+        if (_isPC) {
+            this._updateIcon(this._batteryIcon, 'powerwth.png');
+            return;
+        }
+
         let percentage = device ? device.percentage : 100;
         let state = device ? device.state : UPowerGlib.DeviceState.UNKNOWN;
 
@@ -2392,8 +2399,13 @@ class NetworkSetting {
         });
 
         menunet.set_position(menunetX, menunetY);
-        menunet.set_size(menunetWidth, menunetHeight);
 
+        if(_isPC) {
+            menunet.set_size(menunetWidth, menunetHeight - 43);
+        } else {
+            menunet.set_size(menunetWidth, menunetHeight);
+        }
+        
         let now = new Date();
         let dateLabel = new St.Label({ text: now.toLocaleDateString(), style_class: 'date-labelmn' });
         let timeLabel = new St.Label({ text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), style_class: 'time-labelmn' });
@@ -2510,67 +2522,68 @@ class NetworkSetting {
 
         let brightLabel = new St.Label({ text: "Luminosité", style_class: 'label' });
         let brightSlider = new Slider.Slider(0);
-        let brightBox = new St.BoxLayout({name: 'brightbox', vertical: false, style_class: 'slider-box-brig' });
+        let brightBox = new St.BoxLayout({ name: 'brightbox', vertical: false, style_class: 'slider-box-brig' });
         brightBox.add_child(brightLabel);
         brightBox.add_child(brightSlider);
 
-        brightBox.hide();
-
-        Gio.DBusProxy.new_for_bus(
-            Gio.BusType.SESSION,
-            Gio.DBusProxyFlags.NONE,
-            null,
-            "org.gnome.SettingsDaemon.Power",
-            "/org/gnome/SettingsDaemon/Power",
-            "org.gnome.SettingsDaemon.Power.Screen",
-            null,
-            (source, result) => {
-                try {
-                    let brightnessProxy = Gio.DBusProxy.new_for_bus_finish(result);
-                    
-                    if (brightnessProxy && brightnessProxy.get_name_owner() && menunet) {
-                        menunet._brightnessProxy = brightnessProxy; 
-
-                        let currentBrightness = brightnessProxy.get_cached_property("Brightness");
+        if (_isPC) {
+            brightBox.hide();
+        } else {
+            Gio.DBusProxy.new_for_bus(
+                Gio.BusType.SESSION,
+                Gio.DBusProxyFlags.NONE,
+                null,
+                "org.gnome.SettingsDaemon.Power",
+                "/org/gnome/SettingsDaemon/Power",
+                "org.gnome.SettingsDaemon.Power.Screen",
+                null,
+                (source, result) => {
+                    try {
+                        let brightnessProxy = Gio.DBusProxy.new_for_bus_finish(result);
                         
-                        if (currentBrightness) {
-                            let updatingFromSignal = false;
-                            brightSlider.value = currentBrightness.unpack() / 100;
-                            brightBox.show();
+                        if (brightnessProxy && brightnessProxy.get_name_owner() && menunet) {
+                            menunet._brightnessProxy = brightnessProxy; 
+
+                            let currentBrightness = brightnessProxy.get_cached_property("Brightness");
                             
-                            brightSlider.connect('notify::value', () => {
-                                if (updatingFromSignal) return;
-                                let val = Math.round(brightSlider.value * 100);
-                                try {
-                                    brightnessProxy.call(
-                                        'org.freedesktop.DBus.Properties.Set',
-                                        new GLib.Variant('(ssv)', ['org.gnome.SettingsDaemon.Power.Screen', 'Brightness', new GLib.Variant('i', val)]),
-                                        null,
-                                        Gio.DBusCallFlags.NONE,
-                                        -1,
-                                        null,
-                                        null
-                                    );
-                                } catch (e) {
-                                    log(`[PrismUI] Erreur modification luminosité : ${e.message}`);
-                                }
-                            });
-                            
-                            menunet._brightSignalId = brightnessProxy.connect('g-properties-changed', (proxy, changed) => {
-                                let b = changed.lookup_value('Brightness', null);
-                                if (b) {
-                                    updatingFromSignal = true;
-                                    brightSlider.value = b.unpack() / 100;
-                                    updatingFromSignal = false;
-                                }
-                            });
+                            if (currentBrightness) {
+                                let updatingFromSignal = false;
+                                brightSlider.value = currentBrightness.unpack() / 100;
+                                
+                                brightSlider.connect('notify::value', () => {
+                                    if (updatingFromSignal) return;
+                                    let val = Math.round(brightSlider.value * 100);
+                                    try {
+                                        brightnessProxy.call(
+                                            'org.freedesktop.DBus.Properties.Set',
+                                            new GLib.Variant('(ssv)', ['org.gnome.SettingsDaemon.Power.Screen', 'Brightness', new GLib.Variant('i', val)]),
+                                            null,
+                                            Gio.DBusCallFlags.NONE,
+                                            -1,
+                                            null,
+                                            null
+                                        );
+                                    } catch (e) {
+                                        log(`[PrismUI] Erreur modification luminosité : ${e.message}`);
+                                    }
+                                });
+                                
+                                menunet._brightSignalId = brightnessProxy.connect('g-properties-changed', (proxy, changed) => {
+                                    let b = changed.lookup_value('Brightness', null);
+                                    if (b) {
+                                        updatingFromSignal = true;
+                                        brightSlider.value = b.unpack() / 100;
+                                        updatingFromSignal = false;
+                                    }
+                                });
+                            }
                         }
+                    } catch (e) {
+                        brightBox.destroy();
                     }
-                } catch (e) {
-                    brightBox.destroy();
                 }
-            }
-        );
+            );
+        }
 
         let bottomBox = new St.BoxLayout({ name: 'bottomBox', style_class: 'bottom-box', vertical: false });
         let powerButtonsBox = new St.BoxLayout({ name: 'powerbtn', style_class: 'power-buttons-box' });
@@ -2590,30 +2603,31 @@ class NetworkSetting {
         bottomBox.add_child(powerButtonsBox);
         bottomBox.add_child(new St.Widget({ x_expand: true }));
 
-        let batteryBox = new St.BoxLayout({ name: 'mn-bat-box', style_class: 'menu-battery-box', vertical: false });
-        let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
-        let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
+        if (!_isPC) {
+            let batteryBox = new St.BoxLayout({ name: 'mn-bat-box', style_class: 'menu-battery-box', vertical: false });
+            let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
+            let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
 
-        if (this._upClient) {
-            let device = this._upClient.get_display_device();
-            if (device) {
-                batteryLabel.text = `${Math.round(device.percentage)}%`;
-                let baseName = device.percentage < 10 ? 'battery-emptywth' : (device.percentage < 35 ? 'battery-quarterwth' : (device.percentage < 60 ? 'battery-halfwth' : (device.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
-                let file = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${device.state === UPowerGlib.DeviceState.CHARGING ? '-ch' : ''}.png`);
-                if (file.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: file });
+            if (this._upClient) {
+                let device = this._upClient.get_display_device();
+                if (device) {
+                    batteryLabel.text = `${Math.round(device.percentage)}%`;
+                    let baseName = device.percentage < 10 ? 'battery-emptywth' : (device.percentage < 35 ? 'battery-quarterwth' : (device.percentage < 60 ? 'battery-halfwth' : (device.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
+                    let file = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${device.state === UPowerGlib.DeviceState.CHARGING ? '-ch' : ''}.png`);
+                    if (file.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: file });
+                }
             }
-        }
 
-        batteryBox.add_child(batteryLabel);
-        batteryBox.add_child(batteryIcon);
-        bottomBox.add_child(batteryBox);
+            batteryBox.add_child(batteryLabel);
+            batteryBox.add_child(batteryIcon);
+            bottomBox.add_child(batteryBox);
+        }
 
         menunet.add_child(dateBox);
         menunet.add_child(controlBox);
         menunet.add_child(volumeBox);
         menunet.add_child(brightBox);
         menunet.add_child(bottomBox);
-
         Main.layoutManager.addChrome(menunet);
 
         let stageEventId = global.stage.connect('captured-event', (stage, event) => {
@@ -3274,6 +3288,17 @@ export default class PrismExtension extends Extension {
     }
 
     enable() {
+        try {
+            let upClient = UPowerGlib.Client.new_full(null);
+            let devices = upClient.get_devices();
+            
+            let hasBattery = devices.some(d => d.kind === UPowerGlib.DeviceKind.BATTERY);
+            
+            _isPC = !hasBattery;
+        } catch (e) {
+            _isPC = false;
+        }
+
         this._stylesheet = this.dir.get_child('stylesheet.css');
         this._theme = St.ThemeContext.get_for_stage(global.stage).get_theme();
         this._theme.load_stylesheet(this._stylesheet);
