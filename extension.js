@@ -62,12 +62,12 @@ const PRISM_APPS = {
     'Velora explorer': {
         name: "Velora Explorer",
         autor: "PRISM",
-        version: "0.1.0",
-        tag: "V0.1.0",
+        version: "0.1.1",
+        tag: "V0.1.1",
         repo: "hugodev-teck/Velora-explorer",
         icon: "vlogo.png",
         desktopId: "velora-explorer",
-        getFileName: () => "explorer.js"
+        getFileName: (arch, version) => `explorer-${version}.js`
     }
 };
 
@@ -1605,31 +1605,34 @@ class MyDock {
         let [res, out] = GLib.spawn_command_line_sync('uname -m');
         let arch = new TextDecoder().decode(out).trim();
 
-        // Parcourir le registre pour générer la liste
         for (let id in PRISM_APPS) {
             let app = PRISM_APPS[id];
             let targetFileName = app.getFileName(arch, app.version);
             let targetFilePath = GLib.build_filenamev([programDir, targetFileName]);
             
             let isExactInstalled = Gio.File.new_for_path(targetFilePath).query_exists(null);
-            let isInstalledAnyVersion = false;
             let oldFilePath = null;
 
             let dir = Gio.File.new_for_path(programDir);
             if (dir.query_exists(null)) {
                 let enumerator = dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null);
+                
+                let searchKeyword = targetFileName.split('-')[0].replace('.js', '').replace('.AppImage', '').toLowerCase();
+
                 while (true) {
                     let info = enumerator.next_file(null);
                     if (!info) break;
                     let name = info.get_name();
-                    // On vérifie si le fichier correspond à l'application (ex: commence par desktools)
-                    if (name.toLowerCase().includes(id.toLowerCase()) && name.endsWith('.AppImage')) {
-                        isInstalledAnyVersion = true;
+                    
+                    if (name.toLowerCase().includes(searchKeyword) && (name.endsWith('.AppImage') || name.endsWith('.js'))) {
                         let fullPath = GLib.build_filenamev([programDir, name]);
+                        
                         if (name !== targetFileName) {
                             oldFilePath = fullPath;
+                        } else {
+                            isExactInstalled = true;
+                            oldFilePath = null;
                         }
-                        break;
                     }
                 }
             }
