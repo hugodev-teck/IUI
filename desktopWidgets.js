@@ -6,11 +6,121 @@ import Soup from 'gi://Soup?version=3.0';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
-const LONG_PRESS_TIME = 1500;
 const WIDGET_EDIT_TIME = 800;
 const GRID_SIZE = 25;
 
 const BUILTIN_WIDGETS = [
+    {
+        id: "calendar-widget",
+        name: "Calendrier",
+        gridW: 12,
+        gridH: 7,
+        ui: {
+            type: 'box',
+            vertical: true,
+            style_class: 'prism-widget-box',
+            style: 'padding: 12px; justify-content: center;',
+            children: [
+                { type: 'label', id: 'cal-header', text: 'Mois', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px; text-align: center;' },
+                { type: 'label', id: 'cal-grid', text: 'Calcul...', style: 'font-family: monospace; font-size: 14px; color: #dfe7ff; text-align: center; line-height: 1.6;' }
+            ]
+        },
+        bindings: [
+            {
+                targetId: "cal-header", targetProp: "text", interval: 3600,
+                sourceType: "js",
+                process: `
+                    let d = new Date();
+                    let months = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+                    return months[d.getMonth()] + ' ' + d.getFullYear();
+                `
+            },
+            {
+                targetId: "cal-grid", targetProp: "markup", interval: 3600,
+                sourceType: "js",
+                process: `
+                    let d = new Date();
+                    let year = d.getFullYear();
+                    let month = d.getMonth();
+                            
+                    let firstDay = new Date(year, month, 1).getDay();
+                    let daysInMonth = new Date(year, month + 1, 0).getDate();
+                            
+                    // Lundi = premier jour de la semaine
+                    firstDay = firstDay === 0 ? 6 : firstDay - 1; 
+                            
+                    let grid = ' Lu  Ma  Me  Je  Ve  Sa  Di \\n';
+                    let row = '';
+                            
+                    // Décalage des premiers jours
+                    for (let i = 0; i < firstDay; i++) { row += '    '; }
+                            
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        if (day === d.getDate()) {
+                            // Jour actuel surligné
+                            let inner = day < 10 ? '&#160;&#160;' + day + '&#160;' : '&#160;' + day + '&#160;';
+                            row += '<span background="#ff3333" color="#ffffff">' + inner + '</span>';
+                        } else {
+                            // Jours normaux
+                            row += day < 10 ? '  ' + day + ' ' : ' ' + day + ' ';
+                        }
+                                
+                        // Retour à la ligne en fin de semaine
+                        if ((firstDay + day) % 7 === 0) {
+                            grid += row + '\\n';
+                            row = '';
+                        }
+                    }
+                    
+                    // NOUVEAU : Remplir la fin de la dernière ligne avec des espaces vides
+                    // pour empêcher le "text-align: center" de décaler les derniers jours.
+                    if (row.length > 0) {
+                        let missingDays = 7 - ((firstDay + daysInMonth) % 7);
+                        if (missingDays < 7) {
+                            for (let i = 0; i < missingDays; i++) {
+                                row += '    '; // 4 espaces par jour manquant
+                            }
+                        }
+                        grid += row;
+                    }
+                    
+                    return grid;
+                `
+            }
+        ]
+    },
+    {
+        id: "analog-clock-widget",
+        name: "Horloge Analogique",
+        gridW: 8, gridH: 8,
+        ui: {
+            type: 'bin',
+            style_class: 'prism-widget-box',
+            children: [
+                { type: 'box', style: 'width: 12px; height: 12px; background-color: #ffffff; border-radius: 6px;', pivot_x: 0.5, pivot_y: 0.5 },            
+                { type: 'box', id: 'hour-hand', style: 'width: 6px; height: 35px; background-color: #ffffff; border-radius: 3px; margin-bottom: 35px;', pivot_x: 0.5, pivot_y: 1.0 },
+                { type: 'box', id: 'min-hand', style: 'width: 4px; height: 50px; background-color: #dfe7ff; border-radius: 2px; margin-bottom: 50px;', pivot_x: 0.5, pivot_y: 1.0 },
+                { type: 'box', id: 'sec-hand', style: 'width: 2px; height: 55px; background-color: #ff3333; border-radius: 1px; margin-bottom: 55px;', pivot_x: 0.5, pivot_y: 1.0 }
+            ]
+        },
+        bindings: [
+            {
+                targetId: 'hour-hand', targetProp: 'rotation', interval: 60, sourceType: 'js',
+                process: `
+                    let d = new Date(); 
+                    return ((d.getHours() % 12) * 30) + (d.getMinutes() * 0.5);
+                `
+            },
+            {
+                targetId: 'min-hand', targetProp: 'rotation', interval: 60, sourceType: 'js',
+                process: `return new Date().getMinutes() * 6;`
+            },
+            {
+                targetId: 'sec-hand', targetProp: 'rotation', interval: 1, sourceType: 'js',
+                process: `return new Date().getSeconds() * 6;`
+            }
+        ]
+    },
     {
         id: "clock-widget",
         name: "Horloge",
@@ -579,6 +689,7 @@ export class PrismWidgets {
     _buildUIFromSchema(schema, refs) {
         let widget;
         if (schema.type === 'box') widget = new St.BoxLayout({ vertical: schema.vertical || false, style_class: schema.style_class || '', style: schema.style || '' });
+        else if (schema.type === 'bin') widget = new St.Widget({ layout_manager: new Clutter.BinLayout(), style_class: schema.style_class || '', style: schema.style || '' });
         else if (schema.type === 'label') widget = new St.Label({ text: schema.text || '', style_class: schema.style_class || '', style: schema.style || '' });
         else if (schema.type === 'icon') widget = new St.Icon({
             icon_name: schema.icon_name || 'application-x-executable',
@@ -590,6 +701,11 @@ export class PrismWidgets {
         else if (schema.type === 'progress') widget = new St.Widget({ style_class: schema.style_class || '', style: schema.style || '' });
 
         if (!widget) return null;
+
+        if (schema.pivot_x !== undefined && schema.pivot_y !== undefined) {
+            widget.set_pivot_point(schema.pivot_x, schema.pivot_y);
+        }
+
         if (schema.id && refs) refs[schema.id] = widget;
         if (schema.children) for (let childSchema of schema.children) {
             let child = this._buildUIFromSchema(childSchema, refs);
@@ -693,6 +809,8 @@ export class PrismWidgets {
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
+                                        else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
+                                        else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
                                     }
                                 }
                             }
@@ -704,6 +822,8 @@ export class PrismWidgets {
                             if (refs[bind.targetId]) {
                                 if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                 else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
+                                else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
+                                else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
                             }
                         }
                         
@@ -723,6 +843,8 @@ export class PrismWidgets {
 
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
+                                        else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
+                                        else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
                                     }
                                 } catch (e) {
@@ -745,6 +867,7 @@ export class PrismWidgets {
                                         let finalValue = processor(rawData.toString().trim());
                                         if (refs[bind.targetId]) {
                                             if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
+                                            else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
                                             else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
                                         }
                                     }

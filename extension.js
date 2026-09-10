@@ -49,8 +49,8 @@ const PRISM_APPS = {
     'desktools': {
         name: "DeskTools",
         autor: "PRISM",
-        version: "2.1.0",
-        tag: "DT3",
+        version: "2.1.5",
+        tag: "DT4",
         repo: "hugodev-teck/DeskTools",
         icon: "dt.png",
         getFileName: (arch, version) => {
