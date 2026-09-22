@@ -5,10 +5,13 @@
 /*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
 /*                                                                */
 
-const { St, GObject, Gio, Clutter, GLib } = imports.gi;
-const Main = imports.ui.main;
-const ExtensionUtils = imports.misc.extensionUtils;
-const Me = ExtensionUtils.getCurrentExtension();
+import St from 'gi://St';
+import GObject from 'gi://GObject';
+import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
+
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 const SEARCH_TYPE = {
     ALL: 'all',
@@ -36,6 +39,14 @@ function getLevenshteinDistance(a, b) {
 }
 
 var LocalSearchEngine = class {
+    constructor() {
+        this._searchId = 0;
+    }
+
+    abort() {
+        this._searchId++;
+    }
+
     _calculateScore(query, target) {
         let distance = getLevenshteinDistance(query.toLowerCase(), target.toLowerCase());
         let maxLength = Math.max(query.length, target.length);
@@ -44,7 +55,7 @@ var LocalSearchEngine = class {
         return score;
     }
 
-    _searchDirectoryRecursively(dirFile, lowerQuery, localResults) {
+    _searchDirectoryRecursively(dirFile, lowerQuery, localResults, currentId) {
         return new Promise((resolve) => {
             if (!dirFile.query_exists(null)) return resolve();
             
@@ -53,6 +64,9 @@ var LocalSearchEngine = class {
             let activeScans = 0;
             
             const processNext = () => {
+                // --- AJOUT : Si l'ID a changé, on coupe immédiatement l'exploration ---
+                if (this._searchId !== currentId) return resolve();
+                
                 if (stack.length === 0 && activeScans === 0) return resolve();
                 
                 let launchedScan = false;
@@ -71,6 +85,9 @@ var LocalSearchEngine = class {
                         null,
                         (dir, res) => {
                             activeScans--;
+                            // --- AJOUT : Coupe aussi à la réception du callback ---
+                            if (this._searchId !== currentId) return resolve();
+                            
                             try {
                                 let enumerator = currentDir.enumerate_children_finish(res);
                                 let info;
@@ -120,6 +137,9 @@ var LocalSearchEngine = class {
     }
 
     search(query) {
+        this._searchId++; // Nouveau jeton pour cette recherche
+        let currentId = this._searchId;
+
         if (!query || query.trim().length < 2) return Promise.resolve([]);
         let lowerQuery = query.toLowerCase();
         let localResults = []; 
@@ -149,10 +169,13 @@ var LocalSearchEngine = class {
 
         const homeDirs = ['Documents', 'Bureau', 'Downloads', 'Téléchargements'];
         let fileSearchPromises = homeDirs.map(folder => 
-            this._searchDirectoryRecursively(Gio.File.new_for_path(`${GLib.get_home_dir()}/${folder}`), lowerQuery, localResults)
+            // On passe le currentId à la fonction récursive
+            this._searchDirectoryRecursively(Gio.File.new_for_path(`${GLib.get_home_dir()}/${folder}`), lowerQuery, localResults, currentId)
         );
         
         return Promise.all(fileSearchPromises).then(() => {
+            if (this._searchId !== currentId) return []; // Annule le rendu si obsolète
+            
             localResults.push({
                 type: SEARCH_TYPE.WEB,
                 name: `Rechercher "${query}" sur le Web`,
@@ -166,12 +189,13 @@ var LocalSearchEngine = class {
     }
 };
 
-var AppLauncher = GObject.registerClass(
+export const AppLauncher = GObject.registerClass(
     class AppLauncher extends GObject.Object {
         _init() {
             super._init();
             this._overlayBox = null;
             this._searchTimeout = null; 
+            this._searchGeneration = 0;
             this._searchEngine = new LocalSearchEngine();
             this._currentFilter = SEARCH_TYPE.ALL;
             
@@ -194,18 +218,19 @@ var AppLauncher = GObject.registerClass(
             let monitor = Main.layoutManager.primaryMonitor;
             if (!monitor) return;
 
-            this._overlayBox = new Clutter.Actor({ 
+            this._overlayBox = new St.Widget({ 
                 reactive: true, 
                 width: monitor.width,
                 height: monitor.height,
                 x: monitor.x,
-                y: monitor.y
+                y: monitor.y,
+                layout_manager: new Clutter.BinLayout()
             });
 
             this.bgClicker = new St.Button({
                 reactive: true,
-                width: monitor.width,
-                height: monitor.height,
+                x_expand: true,
+                y_expand: true,
                 style: 'background-color: transparent;'
             });
             this.bgClicker.connect('clicked', () => this.hide());
@@ -213,8 +238,6 @@ var AppLauncher = GObject.registerClass(
 
             let panelWidth = 900;
             let panelHeight = 760;
-            let posX = monitor.x + Math.floor((monitor.width - panelWidth) / 2);
-            let posY = monitor.y + Math.floor((monitor.height - panelHeight) / 2);
 
             this.mainPanel = new St.BoxLayout({
                 name: 'src-mn-panel',
@@ -223,8 +246,8 @@ var AppLauncher = GObject.registerClass(
                 reactive: true,
                 width: panelWidth,
                 height: panelHeight,
-                x: posX,
-                y: posY
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER
             });
 
             let contentLayout = new St.BoxLayout({
@@ -313,7 +336,7 @@ var AppLauncher = GObject.registerClass(
             this.mainPanel.add_child(contentLayout);
             this._overlayBox.add_child(this.mainPanel);
             
-            Main.uiGroup.add_child(this._overlayBox);
+            Main.layoutManager.addChrome(this._overlayBox);
 
             // ÉVÉNEMENTS
             this.searchEntry.clutter_text.connect('text-changed', () => this._onSearchChanged());
@@ -425,6 +448,8 @@ var AppLauncher = GObject.registerClass(
         }
 
         async _triggerSearch(text) {
+            const searchGeneration = ++this._searchGeneration;
+            const overlayBox = this._overlayBox;
             this.filterBox.show();
             this.navBar.hide(); 
             this.innerBox.destroy_all_children();
@@ -432,7 +457,10 @@ var AppLauncher = GObject.registerClass(
             try {
                 let allResults = await this._searchEngine.search(text);
                 
-                if (!this._overlayBox || this.searchEntry.get_text() !== text) return;
+                if (searchGeneration !== this._searchGeneration ||
+                    this._overlayBox !== overlayBox ||
+                    !this.searchEntry ||
+                    this.searchEntry.get_text() !== text) return;
 
                 let filtered = allResults.filter(r => this._currentFilter === SEARCH_TYPE.ALL || r.type === this._currentFilter);
 
@@ -450,7 +478,12 @@ var AppLauncher = GObject.registerClass(
                     });
                     btn.set_width(840);
 
-                    let box = new St.BoxLayout({name: 'src-c-box-3', vertical: false });
+                    let box = new St.BoxLayout({
+                        name: 'src-c-box-3', 
+                        vertical: false,
+                        x_expand: true,
+                        x_align: Clutter.ActorAlign.START
+                    });
                     
                     let icon = new St.Icon({ gicon: r.icon, icon_size: 32, style_class: 'prism-list-icon' });
                     
@@ -495,6 +528,9 @@ var AppLauncher = GObject.registerClass(
         }
 
         hide() {
+            this._searchGeneration++;
+            this._searchEngine.abort();
+
             if (this._overlayBox) {
                 global.stage.set_key_focus(null);
 
@@ -503,9 +539,15 @@ var AppLauncher = GObject.registerClass(
                     this._searchTimeout = null;
                 }
                 
+                Main.layoutManager.removeChrome(this._overlayBox);
                 this._overlayBox.destroy();
                 this._overlayBox = null;
             }
+        }
+
+        destroy() {
+            this.hide();
+            this._searchEngine = null;
         }
     }
 );

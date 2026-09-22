@@ -1,11 +1,126 @@
-const { St, Clutter, GLib, Gio, Soup } = imports.gi;
-const Main = imports.ui.main;
+import St from 'gi://St';
+import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Soup from 'gi://Soup?version=3.0';
 
-const LONG_PRESS_TIME = 1500;
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
 const WIDGET_EDIT_TIME = 800;
 const GRID_SIZE = 25;
 
 const BUILTIN_WIDGETS = [
+    {
+        id: "calendar-widget",
+        name: "Calendrier",
+        gridW: 12,
+        gridH: 7,
+        ui: {
+            type: 'box',
+            vertical: true,
+            style_class: 'prism-widget-box',
+            style: 'padding: 12px; justify-content: center;',
+            children: [
+                { type: 'label', id: 'cal-header', text: 'Mois', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px; text-align: center;' },
+                { type: 'label', id: 'cal-grid', text: 'Calcul...', style: 'font-family: monospace; font-size: 14px; color: #dfe7ff; text-align: center; line-height: 1.6;' }
+            ]
+        },
+        bindings: [
+            {
+                targetId: "cal-header", targetProp: "text", interval: 3600,
+                sourceType: "js",
+                process: `
+                    let d = new Date();
+                    let months = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
+                    return months[d.getMonth()] + ' ' + d.getFullYear();
+                `
+            },
+            {
+                targetId: "cal-grid", targetProp: "markup", interval: 3600,
+                sourceType: "js",
+                process: `
+                    let d = new Date();
+                    let year = d.getFullYear();
+                    let month = d.getMonth();
+                            
+                    let firstDay = new Date(year, month, 1).getDay();
+                    let daysInMonth = new Date(year, month + 1, 0).getDate();
+                            
+                    // Lundi = premier jour de la semaine
+                    firstDay = firstDay === 0 ? 6 : firstDay - 1; 
+                            
+                    let grid = ' Lu  Ma  Me  Je  Ve  Sa  Di \\n';
+                    let row = '';
+                            
+                    // Décalage des premiers jours
+                    for (let i = 0; i < firstDay; i++) { row += '    '; }
+                            
+                    for (let day = 1; day <= daysInMonth; day++) {
+                        if (day === d.getDate()) {
+                            // Jour actuel surligné
+                            let inner = day < 10 ? '&#160;&#160;' + day + '&#160;' : '&#160;' + day + '&#160;';
+                            row += '<span background="#ff3333" color="#ffffff">' + inner + '</span>';
+                        } else {
+                            // Jours normaux
+                            row += day < 10 ? '  ' + day + ' ' : ' ' + day + ' ';
+                        }
+                                
+                        // Retour à la ligne en fin de semaine
+                        if ((firstDay + day) % 7 === 0) {
+                            grid += row + '\\n';
+                            row = '';
+                        }
+                    }
+                    
+                    // NOUVEAU : Remplir la fin de la dernière ligne avec des espaces vides
+                    // pour empêcher le "text-align: center" de décaler les derniers jours.
+                    if (row.length > 0) {
+                        let missingDays = 7 - ((firstDay + daysInMonth) % 7);
+                        if (missingDays < 7) {
+                            for (let i = 0; i < missingDays; i++) {
+                                row += '    '; // 4 espaces par jour manquant
+                            }
+                        }
+                        grid += row;
+                    }
+                    
+                    return grid;
+                `
+            }
+        ]
+    },
+    {
+        id: "analog-clock-widget",
+        name: "Horloge Analogique",
+        gridW: 8, gridH: 8,
+        ui: {
+            type: 'bin',
+            style_class: 'prism-widget-box',
+            children: [
+                { type: 'box', style: 'width: 12px; height: 12px; background-color: #ffffff; border-radius: 6px;', pivot_x: 0.5, pivot_y: 0.5 },            
+                { type: 'box', id: 'hour-hand', style: 'width: 6px; height: 35px; background-color: #ffffff; border-radius: 3px; margin-bottom: 35px;', pivot_x: 0.5, pivot_y: 1.0 },
+                { type: 'box', id: 'min-hand', style: 'width: 4px; height: 50px; background-color: #dfe7ff; border-radius: 2px; margin-bottom: 50px;', pivot_x: 0.5, pivot_y: 1.0 },
+                { type: 'box', id: 'sec-hand', style: 'width: 2px; height: 55px; background-color: #ff3333; border-radius: 1px; margin-bottom: 55px;', pivot_x: 0.5, pivot_y: 1.0 }
+            ]
+        },
+        bindings: [
+            {
+                targetId: 'hour-hand', targetProp: 'rotation', interval: 60, sourceType: 'js',
+                process: `
+                    let d = new Date(); 
+                    return ((d.getHours() % 12) * 30) + (d.getMinutes() * 0.5);
+                `
+            },
+            {
+                targetId: 'min-hand', targetProp: 'rotation', interval: 60, sourceType: 'js',
+                process: `return new Date().getMinutes() * 6;`
+            },
+            {
+                targetId: 'sec-hand', targetProp: 'rotation', interval: 1, sourceType: 'js',
+                process: `return new Date().getSeconds() * 6;`
+            }
+        ]
+    },
     {
         id: "clock-widget",
         name: "Horloge",
@@ -25,30 +140,19 @@ const BUILTIN_WIDGETS = [
                 targetId: 'clock-time',
                 targetProp: 'text',
                 interval: 60,
-                sourceType: 'cmd',
-                source: "date '+%H:%M'",
-                process: 'return data.trim();'
+                sourceType: 'js',
+                process: `let d = new Date(); return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');`
             },
             {
                 targetId: 'clock-date',
                 targetProp: 'text',
                 interval: 60,
-                sourceType: 'cmd',
-                source: "date '+%u_%d_%m_%Y'", // On récupère le numéro du jour (%u) et du mois (%m)
+                sourceType: 'js',
                 process: `
-                    let parts = data.trim().split('_');
-                    let dayOfWeek = parseInt(parts[0]);
-                    let dayNum = parts[1];
-                    let monthNum = parseInt(parts[2]);
-                    let year = parts[3];
-
-                    let days = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+                    let d = new Date();
+                    let days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
                     let months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-
-                    let dName = days[dayOfWeek - 1] || '';
-                    let mName = months[monthNum - 1] || '';
-
-                    return dName + ' ' + dayNum + ' ' + mName + ' ' + year;
+                    return days[d.getDay()] + ' ' + d.getDate() + ' ' + months[d.getMonth()] + ' ' + d.getFullYear();
                 `
             }
         ]
@@ -62,10 +166,12 @@ const BUILTIN_WIDGETS = [
             type: 'box',
             vertical: true,
             style_class: 'prism-widget-box',
-            style: 'padding: 8px; spacing: 6px; border-radius: 16px; width: 100%; height: 100%; x-align: center; y-align: center; horizontal-align: center; vertical-align: middle;',
+            style: 'padding: 8px; spacing: 6px; border-radius: 16px; x-align: center; y-align: center; horizontal-align: center; vertical-align: middle;',
+            x_expand: true,
+            y_expand: true,
             children: [
                 { type: 'icon', id: 'shortcut-icon', icon_name: 'application-x-executable', icon_size: 32, style: 'padding: 4px; x-align: center; y-align: center;' },
-                { type: 'label', id: 'shortcut-label', text: 'Choisir', style: 'font-size: 14px; color: white; text-align: center; line-height: 1.1; width: 100%; max-width: 100%; x-align: center; y-align: center;' }
+                { type: 'label', id: 'shortcut-label', text: 'Choisir', style: 'font-size: 14px; color: white; text-align: center; line-height: 1.1; x-align: center; y-align: center;', x_expand: true, y_expand: true }
             ]
         },
         bindings: [
@@ -276,14 +382,12 @@ const BUILTIN_WIDGETS = [
             type: 'box', vertical: true, style_class: 'prism-widget-box',
             children: [
                 { type: 'label', text: 'Crypto (EUR)', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px;' },
-                // Police monospace pour que les chiffres soient bien alignés
                 { type: 'label', id: 'btc-price', text: 'BTC : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace; margin-bottom: 4px;' },
                 { type: 'label', id: 'eth-price', text: 'ETH : Chargement...', style: 'font-size: 16px; font-weight: bold; color: #ffffff; font-family: monospace;' }
             ]
         },
         bindings: [
             {
-                // Intervalle court : 60 secondes
                 targetId: "btc-price", targetProp: "text", interval: 60,
                 sourceType: "http", 
                 source: "https://api.binance.com/api/v3/ticker/price?symbol=BTCEUR",
@@ -322,7 +426,6 @@ const BUILTIN_WIDGETS = [
         },
         bindings: [
             {
-                // Les monnaies bougent lentement, on actualise toutes les heures (3600 secondes)
                 targetId: "eur-usd", targetProp: "text", interval: 3600,
                 sourceType: "http", 
                 source: "https://api.exchangerate-api.com/v4/latest/EUR",
@@ -360,7 +463,6 @@ const BUILTIN_WIDGETS = [
         },
         bindings: [
             {
-                // Vérifie l'IP publique toutes les 5 minutes
                 targetId: "public-ip", targetProp: "text", interval: 300,
                 sourceType: "http", 
                 source: "https://api.ipify.org?format=json",
@@ -424,9 +526,9 @@ const BUILTIN_WIDGETS = [
 ];
 
 
-var PrismWidgets = class PrismWidgets {
+export class PrismWidgets {
     constructor() {
-        const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
+        const monitor = Main.layoutManager.primaryMonitor || Main.layoutManager.monitors[0];
         this.desktopContainer = new St.Widget({
             name: 'prism-desktop-widgets', layout_manager: new Clutter.FixedLayout(),
             x_expand: true, y_expand: true, reactive: false
@@ -435,7 +537,7 @@ var PrismWidgets = class PrismWidgets {
         this.desktopContainer.set_position(monitor.x, monitor.y);
 
         this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => {
-            const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
+            const monitor = Main.layoutManager.primaryMonitor || Main.layoutManager.monitors[0];
             if (this.desktopContainer) {
                 this.desktopContainer.set_size(monitor.width, monitor.height);
                 this.desktopContainer.set_position(monitor.x, monitor.y);
@@ -446,6 +548,9 @@ var PrismWidgets = class PrismWidgets {
         
         this._widgets = []; 
         this._menuOpen = false;
+
+        this._httpSession = new Soup.Session();
+        this._httpSession.set_user_agent("curl/7.81.0");
 
         this._saveFile = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_config_dir(), 'prism-widgets-layout.json']));
 
@@ -490,51 +595,39 @@ var PrismWidgets = class PrismWidgets {
         } catch (e) {}
     }
 
-    _isEventInsideAnyWidget(event) {
-        let source = event.get_source();
-        if (!source) return false;
-
-        for (let widget of this._widgets) {
-            if (!widget) continue;
-            let actor = source;
-            while (actor) {
-                if (actor === widget) return true;
-                actor = actor.get_parent();
-            }
-        }
-
-        return false;
-    }
-
-    _isEventInsideEditControls(event) {
-        let source = event.get_source();
-        if (!source) return false;
-
-        for (let widget of this._widgets) {
-            if (!widget) continue;
-
-            for (let control of [widget._deleteBtn, widget._editBtn]) {
-                if (!control) continue;
-                let actor = source;
-                while (actor) {
-                    if (actor === control) return true;
-                    actor = actor.get_parent();
-                }
-            }
-        }
-
-        return false;
-    }
-
     _setupLongPress() {
-        global.stage.connect('captured-event', (stage, event) => {
+        this._longPressListenerId = global.stage.connect('captured-event', (stage, event) => {
             let type = event.type();
             let editingActive = this._widgets.some(w => w && w._isEditing);
 
             if (this._draggingWidget) return Clutter.EVENT_PROPAGATE;
 
-            if ((type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) && editingActive && !this._isEventInsideAnyWidget(event) && !this._isEventInsideEditControls(event)) {
-                this._disableAllEditModes();
+            if ((type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) && editingActive) {
+                let coords = event.get_coords();
+                if (!coords) return Clutter.EVENT_PROPAGATE;
+                let [mouseX, mouseY] = coords;
+
+                let isInside = (actor, px, py) => {
+                    if (!actor || !actor.visible) return false;
+                    let [ax, ay] = actor.get_transformed_position();
+                    let [aw, ah] = actor.get_transformed_size();
+                    return px >= ax && px <= ax + aw && py >= ay && py <= ay + ah;
+                };
+
+                let clickedInsideWidgetOrControl = false;
+                for (let w of this._widgets) {
+                    if (!w) continue;
+                    if (isInside(w, mouseX, mouseY) || 
+                       (w._deleteBtn && isInside(w._deleteBtn, mouseX, mouseY)) || 
+                       (w._editBtn && isInside(w._editBtn, mouseX, mouseY))) {
+                        clickedInsideWidgetOrControl = true;
+                        break;
+                    }
+                }
+
+                if (!clickedInsideWidgetOrControl) {
+                    this._disableAllEditModes();
+                }
             }
 
             return Clutter.EVENT_PROPAGATE;
@@ -542,14 +635,12 @@ var PrismWidgets = class PrismWidgets {
     }
 
     _buildWidgetMenu() {
-        // 1. On crée un gestionnaire de grille (FlowLayout)
         let flowLayout = new Clutter.FlowLayout({ 
-            orientation: Clutter.FlowOrientation.HORIZONTAL,
-            column_spacing: 15, // Espace horizontal entre les boutons
-            row_spacing: 15     // Espace vertical entre les lignes
+            orientation: Clutter.Orientation.HORIZONTAL,
+            column_spacing: 15,
+            row_spacing: 15
         });
 
-        // 2. On l'applique à un St.Widget générique (au lieu d'un BoxLayout)
         this.menuContainer = new St.Widget({
             name: 'prism-widget-menu', 
             style_class: 'prism-widget-menu',
@@ -557,7 +648,6 @@ var PrismWidgets = class PrismWidgets {
             reactive: true
         });
 
-        // 3. On ajoute les boutons comme avant
         for (let manifest of BUILTIN_WIDGETS) {
             let btn = this._createDraggableMenuItem(manifest.name, manifest, () => this._buildWidgetFromManifest(manifest));
             this.menuContainer.add_child(btn);
@@ -573,19 +663,15 @@ var PrismWidgets = class PrismWidgets {
         if (this._menuOpen) {
             let monitor = Main.layoutManager.primaryMonitor;
             
-            // 1. On limite la largeur maximale du menu à 80% de l'écran
-            // C'est ce qui force les éléments à passer à la ligne !
             let maxWidth = monitor.width * 0.8;
             this.menuContainer.set_width(maxWidth);
 
-            // 2. Magie de GNOME : On lui demande "Avec cette largeur, quelle hauteur te faut-il ?"
             let [minHeight, natHeight] = this.menuContainer.get_preferred_height(maxWidth);
             this.menuContainer.set_height(natHeight);
 
-            // 3. On centre le menu en bas, en prenant en compte sa nouvelle hauteur dynamique
             this.menuContainer.set_position(
                 (monitor.width - maxWidth) / 2, 
-                monitor.height - natHeight - 100 // 100px de marge avec le bas de l'écran
+                monitor.height - natHeight - 100 
             );
 
             this.menuContainer.show();
@@ -603,6 +689,7 @@ var PrismWidgets = class PrismWidgets {
     _buildUIFromSchema(schema, refs) {
         let widget;
         if (schema.type === 'box') widget = new St.BoxLayout({ vertical: schema.vertical || false, style_class: schema.style_class || '', style: schema.style || '' });
+        else if (schema.type === 'bin') widget = new St.Widget({ layout_manager: new Clutter.BinLayout(), style_class: schema.style_class || '', style: schema.style || '' });
         else if (schema.type === 'label') widget = new St.Label({ text: schema.text || '', style_class: schema.style_class || '', style: schema.style || '' });
         else if (schema.type === 'icon') widget = new St.Icon({
             icon_name: schema.icon_name || 'application-x-executable',
@@ -614,6 +701,11 @@ var PrismWidgets = class PrismWidgets {
         else if (schema.type === 'progress') widget = new St.Widget({ style_class: schema.style_class || '', style: schema.style || '' });
 
         if (!widget) return null;
+
+        if (schema.pivot_x !== undefined && schema.pivot_y !== undefined) {
+            widget.set_pivot_point(schema.pivot_x, schema.pivot_y);
+        }
+
         if (schema.id && refs) refs[schema.id] = widget;
         if (schema.children) for (let childSchema of schema.children) {
             let child = this._buildUIFromSchema(childSchema, refs);
@@ -702,6 +794,10 @@ var PrismWidgets = class PrismWidgets {
                 }
 
                 const updateData = () => {
+                    if (!box || (box.is_destroyed && box.is_destroyed())) {
+                        return GLib.SOURCE_REMOVE;
+                    }
+
                     try {
                         if (bind.sourceType === 'file') {
                             let [ok, contents] = GLib.file_get_contents(bind.source);
@@ -713,10 +809,23 @@ var PrismWidgets = class PrismWidgets {
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
+                                        else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
+                                        else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
                                     }
                                 }
                             }
-                        } 
+                        }
+
+                        else if (bind.sourceType === 'js') {
+                            let processor = new Function(bind.process);
+                            let finalValue = processor();
+                            if (refs[bind.targetId]) {
+                                if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
+                                else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
+                                else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
+                                else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
+                            }
+                        }
                         
                         else if (bind.sourceType === 'cmd') {
                             let proc = Gio.Subprocess.new(
@@ -734,6 +843,8 @@ var PrismWidgets = class PrismWidgets {
 
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
+                                        else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
+                                        else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
                                     }
                                 } catch (e) {
@@ -746,49 +857,43 @@ var PrismWidgets = class PrismWidgets {
 
                         else if (bind.sourceType === 'http') {
                             try {
-                                let isSoup3 = Soup.MAJOR_VERSION === 3;
-                                let session = isSoup3 
-                                    ? new Soup.Session({ user_agent: "curl/7.81.0" }) 
-                                    : new Soup.SessionAsync({ user_agent: "curl/7.81.0" });
-
+                                // On utilise la session globale au lieu d'en recréer une
                                 let message = Soup.Message.new('GET', bind.source);
 
                                 const applyData = (rawData) => {
-                                    if (!box || !box.get_parent()) return;
+                                    if (!box || box.is_destroyed && box.is_destroyed()) return;
                                     if (rawData) {
                                         let processor = new Function('data', bind.process);
                                         let finalValue = processor(rawData.toString().trim());
                                         if (refs[bind.targetId]) {
                                             if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
+                                            else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);
                                             else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
                                         }
                                     }
                                 };
 
                                 const showError = (errStr) => {
-                                    if (box && box.get_parent() && refs[bind.targetId] && bind.targetProp === 'text') refs[bind.targetId].set_text(errStr);
+                                    if (!box || box.is_destroyed && box.is_destroyed()) return;
+                                    if (refs[bind.targetId] && bind.targetProp === 'text') refs[bind.targetId].set_text(errStr);
                                 };
 
-                                if (isSoup3) {
-                                    session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (sess, res) => {
-                                        try {
-                                            let bytes = sess.send_and_read_finish(res);
+                                this._httpSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (sess, res) => {
+                                    try {
+                                        let bytes = sess.send_and_read_finish(res);
+                                        let statusCode = message.get_status();
+
+                                        if (statusCode === 200) {
                                             let data = new TextDecoder("utf-8").decode(bytes.toArray());
                                             applyData(data);
-                                        } catch (e) { showError("Err: Réseau"); }
-                                    });
-                                } else {
-                                    session.queue_message(message, (sess, msg) => {
-                                        try {
-                                            if (msg.status_code === 200) applyData(msg.response_body.data);
-                                            else showError("Err: " + msg.status_code);
-                                        } catch (e) { showError("Err: Réseau"); }
-                                    });
-                                }
+                                        } else {
+                                            showError("Err: " + statusCode);
+                                        }
+                                    } catch (e) { showError("Err: Réseau"); }
+                                });
                             } catch (e) {
                                 if (refs[bind.targetId] && bind.targetProp === 'text') {
-                                    let shortError = e.message ? e.message.substring(0, 15) : "Crash";
-                                    refs[bind.targetId].set_text("Err: " + shortError);
+                                    refs[bind.targetId].set_text("Err: Crash");
                                 }
                             }
                         }
@@ -816,11 +921,25 @@ var PrismWidgets = class PrismWidgets {
         let wWidth = (manifest.gridW || 4) * GRID_SIZE;
         let wHeight = (manifest.gridH || 3) * GRID_SIZE;
         let ghostX = 0, ghostY = 0;
+        let isColliding = false; // Nouvelle variable pour mémoriser l'état de collision
 
         const updateGhostPosition = (x, y) => {
             ghostX = this._snap(x - (wWidth / 2)); 
             ghostY = this._snap(y - (wHeight / 2));
-            if (dragActor) dragActor.set_position(ghostX, ghostY);
+            
+            // On vérifie en temps réel si la position accrochée superpose un autre widget
+            isColliding = this._checkCollision(ghostX, ghostY, wWidth, wHeight);
+            
+            if (dragActor) { 
+                dragActor.set_position(ghostX, ghostY);
+                
+                // Retour visuel : on passe la boîte en rouge si l'emplacement est occupé
+                if (isColliding) {
+                    dragActor.set_style('background-color: rgba(255, 50, 50, 0.4); border: 2px solid #ff3333; border-radius: 16px;');
+                } else {
+                    dragActor.set_style(''); // Restaure le style CSS par défaut
+                }
+            }
         };
 
         const startDrag = (x, y) => {
@@ -830,18 +949,39 @@ var PrismWidgets = class PrismWidgets {
             
             updateGhostPosition(x, y);
 
+            let dragStartTime = Date.now();
+
             stageEventId = global.stage.connect('captured-event', (stage, event) => {
                 let type = event.type();
-                let [cx, cy] = event.get_coords();
+                
+                let coords = event.get_coords();
+                if (!coords) return Clutter.EVENT_PROPAGATE;
+                let [cx, cy] = coords;
 
                 if (type === Clutter.EventType.MOTION || type === Clutter.EventType.TOUCH_UPDATE) {
                     updateGhostPosition(cx, cy);
                     return Clutter.EVENT_STOP;
                 } 
-
                 else if (type === Clutter.EventType.BUTTON_RELEASE || type === Clutter.EventType.TOUCH_END) {
+                    if (Date.now() - dragStartTime < 300) {
+                        return Clutter.EVENT_PROPAGATE;
+                    }
                     endDrag();
                     return Clutter.EVENT_STOP;
+                }
+                else if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+                    if (Date.now() - dragStartTime > 300) {
+                        endDrag();
+                        return Clutter.EVENT_STOP;
+                    }
+                }
+
+                else if (type === Clutter.EventType.KEY_PRESS) {
+                    if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                        if (stageEventId) { global.stage.disconnect(stageEventId); stageEventId = 0; }
+                        if (dragActor) { dragActor.destroy(); dragActor = null; }
+                        return Clutter.EVENT_STOP;
+                    }
                 }
                 return Clutter.EVENT_PROPAGATE;
             });
@@ -854,6 +994,13 @@ var PrismWidgets = class PrismWidgets {
             }
 
             if (dragActor) { dragActor.destroy(); dragActor = null; }
+            
+            // Si l'emplacement final est en collision, on refuse l'action et on annule
+            if (isColliding) {
+                Main.osdWindowManager.show(0, Gio.icon_new_for_string('dialog-error-symbolic'), "Emplacement occupé", null);
+                return; 
+            }
+
             this._toggleWidgetMenu();
 
             let newWidget = widgetCreatorFn();
@@ -873,12 +1020,20 @@ var PrismWidgets = class PrismWidgets {
         };
 
         btn.connect('button-press-event', (actor, event) => { 
-            if (event.get_button() === 1) startDrag(...event.get_coords()); 
+            if (event.get_button() === 1) {
+                let coords = event.get_coords();
+                if (coords) startDrag(...coords);
+                return Clutter.EVENT_STOP; 
+            }
             return Clutter.EVENT_PROPAGATE; 
         });
         
         btn.connect('touch-event', (actor, event) => { 
-            if (event.type() === Clutter.EventType.TOUCH_BEGIN) startDrag(...event.get_coords()); 
+            if (event.type() === Clutter.EventType.TOUCH_BEGIN) {
+                let coords = event.get_coords();
+                if (coords) startDrag(...coords);
+                return Clutter.EVENT_STOP; 
+            }
             return Clutter.EVENT_PROPAGATE; 
         });
 
@@ -987,6 +1142,14 @@ var PrismWidgets = class PrismWidgets {
                 handleQuickAction();
             }
             return Clutter.EVENT_PROPAGATE;
+        });
+
+        widget.connect('destroy', () => {
+            cancelPress();
+            if (widget._dragListenerId) {
+                global.stage.disconnect(widget._dragListenerId);
+                widget._dragListenerId = 0;
+            }
         });
     }
 
@@ -1113,7 +1276,17 @@ var PrismWidgets = class PrismWidgets {
         });
 
         renderPage();
+
+        outer.connect('key-press-event', (actor, event) => {
+            if (event.get_key_symbol() === Clutter.KEY_Escape) {
+                outer.destroy();
+                return Clutter.EVENT_STOP;
+            }
+            return Clutter.EVENT_PROPAGATE;
+        });
+        
         Main.uiGroup.add_child(outer);
+        global.stage.set_key_focus(outer);
 
         let monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
         let x = monitor.x + Math.max(0, (monitor.width - popupWidth) / 2);
@@ -1166,17 +1339,14 @@ var PrismWidgets = class PrismWidgets {
 
             this._widgets = this._widgets.filter(w => w !== widget);
             this._saveLayout();
-            return Clutter.EVENT_STOP;
         };
 
-        deleteBtn.connect('button-press-event', (a, e) => {
-            if (e.get_button() === 1) return closeAction();
-            return Clutter.EVENT_PROPAGATE;
-        });
-        deleteBtn.connect('touch-event', (a, e) => {
-            if (e.type() === Clutter.EventType.TOUCH_BEGIN) return closeAction();
-            return Clutter.EVENT_PROPAGATE;
-        });
+        // Remplacement par le signal natif 'clicked' 
+        deleteBtn.connect('clicked', () => closeAction());
+        
+        if (editBtn) {
+            editBtn.connect('clicked', () => this._openShortcutAppPicker(widget));
+        }
     }
 
     _disableAllEditModes() {
@@ -1239,7 +1409,7 @@ var PrismWidgets = class PrismWidgets {
         };
 
         const updatePosition = (x, y) => {
-            const monitor = Main.layoutManager.primaryMonitor || global.screen.get_primary_monitor();
+            const monitor = Main.layoutManager.primaryMonitor || Main.layoutManager.monitors[0];
             let snappedX = this._snap(x - widget._dragOffsetX);
             let snappedY = this._snap(y - widget._dragOffsetY);
 
@@ -1281,11 +1451,16 @@ var PrismWidgets = class PrismWidgets {
 
     destroy() {
         this._disableAllEditModes();
+        if (this._longPressListenerId) {
+            global.stage.disconnect(this._longPressListenerId);
+            this._longPressListenerId = 0;
+        }
         if (this._monitorsChangedId) {
             Main.layoutManager.disconnect(this._monitorsChangedId);
             this._monitorsChangedId = 0;
         }
         if (this.desktopContainer) { this.desktopContainer.destroy(); this.desktopContainer = null; }
         if (this.menuContainer) { this.menuContainer.destroy(); this.menuContainer = null; }
+        this._widgets = [];
     }
 };

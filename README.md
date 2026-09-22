@@ -1,8 +1,11 @@
+> [!NOTE]
+> Documentation du code dans Documentation/FULL.md.
+
 # Installation et débogage
 
 ### Prérequis
 
-- GNOME Shell 43.9 (vérifier avec `gnome-shell --version`)
+- GNOME Shell 48 (vérifier avec `gnome-shell --version`)
 - `git` installé (`sudo apt install git` / `sudo dnf install git`)
 - `glib-compile-schemas` installé — généralement inclus dans le paquet `libglib2.0-bin` (Debian/Ubuntu) ou `glib2-devel` (Fedora/Arch)
 

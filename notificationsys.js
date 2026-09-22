@@ -5,14 +5,20 @@
 /*   https://creativecommons.org/licenses/by-nc/4.0/legalcode.en  */
 /*                                                                */
 
-const { St, GLib, Gio, Clutter, Pango, Shell } = imports.gi;
-const Main = imports.ui.main;
-const ExtensionUtils = imports.misc.extensionUtils;
-const Me = ExtensionUtils.getCurrentExtension();
+import St from 'gi://St';
+import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
+import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
+import Shell from 'gi://Shell';
 
-var NotificationManager = class NotificationManager {
-    constructor() {
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+
+export class NotificationManager {
+    constructor(ext) {
+        this._ext = ext; // Sauvegarde de l'instance de l'extension
         this.notifications = [];
+        this._notificationTimeouts = new Set();
         this.soundEnabled = true;
         this.dndEnabled = false;
 
@@ -72,7 +78,6 @@ var NotificationManager = class NotificationManager {
                 let now = Date.now();
                 const ONE_MONTH_MS = 30 * 24 * 60 * 60 * 1000; 
 
-                const Shell = imports.gi.Shell;
                 let appSys = Shell.AppSystem.get_default();
 
                 this.notifications = [];
@@ -101,7 +106,7 @@ var NotificationManager = class NotificationManager {
 
     _createNotificationIcon() {
         this.notificationIcon = new St.Icon({
-            gicon: Gio.icon_new_for_string(`${Me.path}/icons/interface/notification/bell-white.png`),
+            gicon: Gio.icon_new_for_string(`${this._ext.path}/icons/interface/notification/bell-white.png`),
             style_class: 'notification-icon',
             icon_size: 26
         });
@@ -122,10 +127,17 @@ var NotificationManager = class NotificationManager {
 
         Main.layoutManager._backgroundGroup.add_child(this.notificationBox);
         
-        this.notificationBox.connect('notify::allocation', () => this._setPosition());
+        this._notifPosIdleId = 0;
+        this.notificationBox.connect('notify::allocation', () => {
+            if (this._notifPosIdleId) return;
+            this._notifPosIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                this._notifPosIdleId = 0;
+                if (this.notificationBox) this._setPosition();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
 
-        const Mainloop = imports.mainloop;
-        Mainloop.idle_add(() => {
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this.notificationBox) {
                 this._setPosition();
             }
@@ -212,15 +224,31 @@ var NotificationManager = class NotificationManager {
             
             if (!this._stageEventId) {
                 this._stageEventId = global.stage.connect('captured-event', (actor, event) => {
-                    if (event.type() === Clutter.EventType.BUTTON_PRESS) {
-                        let target = event.get_source();
-                        
-                        if (target && (this.historyContainer.contains(target) || this.notificationBox.contains(target))) {
+                    let type = event.type();
+                    if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+                        let coords = event.get_coords();
+                        if (!coords) return Clutter.EVENT_PROPAGATE;
+                        let [mouseX, mouseY] = coords;
+
+                        let isInside = (targetActor, px, py) => {
+                            if (!targetActor || !targetActor.visible) return false;
+                            let [ax, ay] = targetActor.get_transformed_position();
+                            let [aw, ah] = targetActor.get_transformed_size();
+                            return px >= ax && px <= ax + aw && py >= ay && py <= ay + ah;
+                        };
+
+                        // Si le clic est dans l'historique ou sur le bouton de la cloche, on laisse passer
+                        if (isInside(this.historyContainer, mouseX, mouseY) || isInside(this.notificationBox, mouseX, mouseY)) {
+                            const clickedRow = this._notificationRows?.find(row => {
+                                if (!isInside(row.actor, mouseX, mouseY)) return false;
+                                return !isInside(row.actionBox, mouseX, mouseY);
+                            });
+                            if (clickedRow) clickedRow.toggle();
                             return Clutter.EVENT_PROPAGATE;
                         }
                         
+                        // Sinon, on ferme l'historique
                         this._toggleNotificationHistory();
-                        
                         return Clutter.EVENT_PROPAGATE;
                     }
                     return Clutter.EVENT_PROPAGATE;
@@ -267,7 +295,8 @@ var NotificationManager = class NotificationManager {
     }
 
     _updateHistoryContainer() {
-        this.historyContainer.remove_all_children();
+        this.historyContainer.destroy_all_children();
+        this._notificationRows = [];
 
         let monitor = Main.layoutManager.primaryMonitor;
         const MARGIN = 20;
@@ -323,7 +352,7 @@ var NotificationManager = class NotificationManager {
         });
         listContainer.set_width(PANEL_WIDTH - 30);
         
-        scrollArea.add_actor(listContainer);
+        scrollArea.set_child(listContainer);
         this.historyContainer.add_child(scrollArea);
 
         if (this.notifications.length === 0) {
@@ -470,9 +499,7 @@ var NotificationManager = class NotificationManager {
 
                 notificationBox.add_child(actionBox);
 
-                notificationBox.connect('button-release-event', (actor, event) => {
-                    if (actionBox.contains(event.get_source())) return Clutter.EVENT_PROPAGATE;
-
+                const toggleActions = () => {
                     let wasVisible = actionBox.visible;
                     listContainer.get_children().forEach(child => {
                         if (child !== notificationBox) {
@@ -486,6 +513,7 @@ var NotificationManager = class NotificationManager {
                             if (child.get_children) {
                                 let actionChild = child.get_children().find(c => c.has_style_class_name && c.has_style_class_name('notification-item-action-box'));
                                 if (actionChild) {
+                                    actionChild.set_style('margin-top: 2px; spacing: 8px; height: 22px; opacity: 0; visibility: hidden;');
                                     actionChild.hide();
                                     actionChild.set_opacity(0);
                                 }
@@ -494,6 +522,7 @@ var NotificationManager = class NotificationManager {
                     });
 
                     if (wasVisible) {
+                        actionBox.set_style('margin-top: 2px; spacing: 8px; height: 22px; opacity: 0; visibility: hidden;');
                         actionBox.hide();
                         actionBox.set_opacity(0);
                         notificationBox.remove_style_class_name('notification-box-expanded');
@@ -502,6 +531,7 @@ var NotificationManager = class NotificationManager {
                         listContainer.queue_relayout();
                         notificationBox._prismActionsVisible = false;
                     } else {
+                        actionBox.set_style('margin-top: 2px; spacing: 8px; height: 22px; opacity: 1; visibility: visible;');
                         actionBox.set_opacity(255);
                         actionBox.show();
                         notificationBox.add_style_class_name('notification-box-expanded');
@@ -510,9 +540,9 @@ var NotificationManager = class NotificationManager {
                         listContainer.queue_relayout();
                         notificationBox._prismActionsVisible = true;
                     }
+                };
 
-                    return Clutter.EVENT_PROPAGATE;
-                });
+                this._notificationRows.push({ actor: notificationBox, actionBox, toggle: toggleActions });
 
                 listContainer.add_child(notificationBox);
             });
@@ -638,7 +668,9 @@ var NotificationManager = class NotificationManager {
         this.notificationContainer.add_child(notificationWrapper);
         this.notificationContainer.show();
 
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+        let timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 5000, () => {
+            this._notificationTimeouts.delete(timeoutId);
+            if (!this.notificationContainer) return GLib.SOURCE_REMOVE;
             if (notificationWrapper.get_parent() === this.notificationContainer) {
                 this.notificationContainer.remove_child(notificationWrapper);
             }
@@ -647,10 +679,16 @@ var NotificationManager = class NotificationManager {
             }
             return GLib.SOURCE_REMOVE; 
         });
+        this._notificationTimeouts.add(timeoutId);
     }
 
     destroy() {
         this._hideNotificationTooltip();
+
+        for (let timeoutId of this._notificationTimeouts) {
+            GLib.Source.remove(timeoutId);
+        }
+        this._notificationTimeouts.clear();
 
         if (this.notificationTooltip) {
             Main.layoutManager.removeChrome(this.notificationTooltip);
@@ -666,6 +704,11 @@ var NotificationManager = class NotificationManager {
         if (this._notifMonitorId) {
             Main.layoutManager.disconnect(this._notifMonitorId);
             this._notifMonitorId = 0;
+        }
+
+        if (this._notifPosIdleId) {
+            GLib.Source.remove(this._notifPosIdleId);
+            this._notifPosIdleId = 0;
         }
 
         if (this._sourceAddedSignal) {
@@ -690,11 +733,27 @@ var NotificationManager = class NotificationManager {
             this.notificationBox.destroy();
             this.notificationBox = null;
         }
+
+        if (this._notifPosIdleId) {
+            GLib.Source.remove(this._notifPosIdleId);
+            this._notifPosIdleId = 0;
+        }
     }
 
     _setupNotificationListener() {
         this._sourceAddedSignal = Main.messageTray.connect('source-added', (tray, source) => {
             let notifAddedSignal = source.connect('notification-added', (source, notification) => {
+                // 1. On empêche l'OS d'afficher sa propre bannière/popup native
+                if (notification && typeof notification.setUrgency === 'function') {
+                    // Les bannières passent par le messageTray, on peut fermer ou ignorer l'affichage natif
+                }
+                
+                // Astuce radicale sous GNOME Shell pour masquer la popup native : 
+                // Empêcher l'expansion de la notification dans le tray si elle vient d'arriver
+                if (notification && typeof notification.destroy === 'function') {
+                    // On récupère les infos avant de détruire la notification native pour l'OS
+                }
+
                 let title = notification.title || "Nouvelle notification";
                 let rawMessage = notification.body || notification.bannerBodyText || "";
                 let cleanMessage = rawMessage.replace(/<[^>]+>/g, '');
@@ -711,11 +770,19 @@ var NotificationManager = class NotificationManager {
                     }
                 }
 
+                // 2. On l'affiche dans TON interface PRISM
                 this.showNotification(title, cleanMessage, appName, gicon, app);
 
+                // 3. On détruit immédiatement la notification native de l'OS pour qu'elle n'apparaisse pas à l'écran
                 GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                     try {
-                        if (notification) notification.destroy();
+                        if (notification) {
+                            // Fermer / détruire la notification pour l'enlever du system tray natif de GNOME
+                            if (typeof notification.close === 'function') {
+                                notification.close();
+                            }
+                            notification.destroy();
+                        }
                     } catch (e) {}
                     return GLib.SOURCE_REMOVE;
                 });
@@ -727,12 +794,3 @@ var NotificationManager = class NotificationManager {
         });
     }
 };
-
-function init() {}
-function enable() { global.notificationManager = new NotificationManager(); }
-function disable() {
-    if (global.notificationManager) {
-        global.notificationManager.destroy();
-        global.notificationManager = null;
-    }
-}
