@@ -1,5 +1,32 @@
+<div align="center">
+
+# IUI
+
+### A modern desktop environment built on GNOME Shell
+
+<p>
+<img src="https://img.shields.io/badge/GNOME-48-4A86CF?logo=gnome&logoColor=white">
+<img src="https://img.shields.io/github/issues/hugodev-teck/IUI">
+<img src="https://img.shields.io/github/stars/hugodev-teck/IUI">
+</p>
+
+<p>
+  <a href="https://projet-prism.fr/">Site web</a> •
+  <a href="Documentation/FULL.md">Documentation</a> •
+  <a href="../../issues">Issues</a>
+</p>
+<img width="1435" height="896" alt="image" src="https://github.com/user-attachments/assets/99681720-81d6-4bf8-bb4d-ee21b2f7371b" />
+</div>
+
+
+### Informations utiles :
+
+> [!WARNING]
+> IUI est toujours en développement.
+> Il est actuellement destiné aux utilisateurs à l’aise avec les problèmes de test et de reporting.
+
 > [!NOTE]
-> Documentation du code dans Documentation/FULL.md.
+> Documentation complète du code dans Documentation/FULL.md.
 
 # Installation et débogage
 
