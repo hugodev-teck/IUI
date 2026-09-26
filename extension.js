@@ -36,7 +36,6 @@ import { NotificationManager } from './notificationsys.js';
 import { AppLauncher } from './intelligentsearchbar.js';
 import { PrismWidgets } from './desktopWidgets.js';
 import { ClipboardManager } from './clipboard.js';
-import { WindowManager } from './windowmanager.js';
 
 const Mainloop = {
     idle_add: callback => GLib.idle_add(GLib.PRIORITY_DEFAULT, callback),
@@ -3312,7 +3311,13 @@ export default class PrismExtension extends Extension {
         if (!global.appLauncher) global.appLauncher = new AppLauncher();
         if (!global.notificationManager) global.notificationManager = new NotificationManager(this);
         if (!global.prismWidgets) global.prismWidgets = new PrismWidgets();
-        if (!global._windowManager) this._windowManager = new WindowManager(global.myDock);
+        import('./windowmanager.js').then(module => {
+            if (!this._windowManager) {
+                this._windowManager = new module.WindowManager(global.myDock);
+            }
+        }).catch(err => {
+            log(`WindowManager absent ou en attente d'installation : ${err.message}`);
+        });
 
         let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
         let wallpaperPath = this.dir.get_child('icons').get_child('interface').get_child('wallpaper').get_child('officiel-wallpaper-prismUI.png').get_path();

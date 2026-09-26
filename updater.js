@@ -8,8 +8,8 @@ import Soup from 'gi://Soup?version=3.0';
 const args = ARGV || [];
 const EXTENSION_PATH = args[0] || GLib.get_current_dir();
 
-const BASE_URL = "https://raw.githubusercontent.com/hugodev-teck/IUI/refs/heads/gnome-48-migration/";
-const FILES_TO_UPDATE = [
+const BASE_URL = "https://raw.githubusercontent.com/hugodev-teck/IUI/refs/heads/main/";
+let FILES_TO_UPDATE = [
     "desktopWidgets.js", "intelligentsearchbar.js", "notificationsys.js", 
     "stylesheet.css", "clipboard.js", "extension.js", "metadata.json",
     "icons/vlogo.png", "icons/logo.png", "updater.js", "windowmanager.js"
@@ -133,6 +133,10 @@ app.connect('activate', () => {
 
                 let remoteMetadata = JSON.parse(new TextDecoder("utf-8").decode(bytes.get_data()));
                 
+                if (remoteMetadata.files && Array.isArray(remoteMetadata.files)) {
+                    FILES_TO_UPDATE = remoteMetadata.files;
+                }
+
                 let isNewVersion = (remoteMetadata.version > localMetadata.version);
                 let isNewSubVersion = (remoteMetadata.version === localMetadata.version && remoteMetadata["sub-version"] !== localMetadata["sub-version"]);
 

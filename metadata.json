@@ -7,6 +7,19 @@
   "permissions": ["org.gnome.shell"],
   "settings-schema": "org.gnome.shell.extensions.pdock",
   "version": 1.40,
-  "sub-version": "K008",
-  "title-version": "Wayland Edition"
+  "sub-version": "K009",
+  "title-version": "Wayland Edition",
+  "files": [
+    "desktopWidgets.js",
+    "intelligentsearchbar.js",
+    "notificationsys.js",
+    "stylesheet.css",
+    "clipboard.js",
+    "extension.js",
+    "metadata.json",
+    "updater.js",
+    "windowmanager.js",
+    "icons/vlogo.png",
+    "icons/logo.png"
+  ]
 }
