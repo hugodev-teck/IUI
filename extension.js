@@ -17,6 +17,7 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
+import GnomeDesktop from 'gi://GnomeDesktop';
 import NM from 'gi://NM';
 import UPowerGlib from 'gi://UPowerGlib';
 import Meta from 'gi://Meta';
@@ -32,7 +33,7 @@ import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import { NotificationManager } from './notificationsys.js';
+import { NotificationManager, getTopBarTooltipY } from './notificationsys.js';
 import { AppLauncher } from './intelligentsearchbar.js';
 import { PrismWidgets } from './desktopWidgets.js';
 import { ClipboardManager } from './clipboard.js';
@@ -1901,6 +1902,21 @@ class NetworkSetting {
             vertical: false
         });
 
+        this.clockContainer = new St.BoxLayout({
+            style_class: 'clock-date-container',
+            name: 'clock-date-container',
+            vertical: false,
+            reactive: true,
+            track_hover: true
+        });
+        this.clockLabel = new St.Label({
+            style_class: 'clock-date-label',
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        this.clockContainer.add_child(this.clockLabel);
+        this.clockContainer.connect('enter-event', () => this._showStatusTooltip(this.clockContainer, 'clock'));
+        this.clockContainer.connect('leave-event', () => this._hideStatusTooltip());
+
         let wifiObj = this.createDynamicButton('wifiwth0barre.png', 'wifi');
         this.wifiButton = wifiObj.button;
         this._wifiIcon = wifiObj.icon;
@@ -1918,18 +1934,25 @@ class NetworkSetting {
         this.container.add_child(this.batteryButton);
 
         Main.layoutManager._backgroundGroup.add_child(this.container);
+        Main.layoutManager._backgroundGroup.add_child(this.clockContainer);
+
+        this._wallClock = new GnomeDesktop.WallClock();
+        this._wallClockSignalId = this._wallClock.connect('notify::clock', () => this._updateClock());
+        this._updateClock();
         
         this._netPosIdleId = 0;
         let queueNetPositionUpdate = () => {
             if (this._netPosIdleId) return;
             this._netPosIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 this._netPosIdleId = 0;
-                if (this.container) this._setPosition();
+                if (this.container || this.clockContainer) this._setPosition();
                 return GLib.SOURCE_REMOVE;
             });
         };
         this.container.connect('notify::width', queueNetPositionUpdate);
         this.container.connect('notify::height', queueNetPositionUpdate);
+        this.clockContainer.connect('notify::width', queueNetPositionUpdate);
+        this.clockContainer.connect('notify::height', queueNetPositionUpdate);
 
         Mainloop.idle_add(() => {
             if (this.container) this._setPosition();
@@ -1962,6 +1985,8 @@ class NetworkSetting {
     }
 
     _getStatusTooltipText(type) {
+        if (type === 'clock') return 'Horloge (Heure local)';
+
         if (type === 'sound') {
             let stream = this._mixerControl ? this._mixerControl.get_default_sink() : null;
             if (!stream) return 'Son indisponible';
@@ -2007,19 +2032,19 @@ class NetworkSetting {
 
         this.statusTooltip.set_text(this._getStatusTooltipText(type));
         this.statusTooltip.show();
-        let [x, y] = button.get_transformed_position();
-        let [width, height] = button.get_transformed_size();
+        let [x] = button.get_transformed_position();
+        let [width] = button.get_transformed_size();
         let monitor = Main.layoutManager.primaryMonitor;
         let tooltipWidth = this.statusTooltip.width;
         let tooltipHeight = this.statusTooltip.height;
         let tooltipX = x + (width - tooltipWidth) / 2;
-        let tooltipY = y + height + 13;
+        let tooltipY = getTopBarTooltipY(monitor);
         let minX = monitor.x + 8;
         let maxX = monitor.x + monitor.width - tooltipWidth - 8;
         let maxY = monitor.y + monitor.height - tooltipHeight - 8;
 
         tooltipX = Math.max(minX, Math.min(maxX, tooltipX));
-        if (tooltipY > maxY) tooltipY = y - tooltipHeight - 8;
+        if (tooltipY > maxY) tooltipY = monitor.y + 11 - tooltipHeight - 8;
         tooltipY = Math.max(monitor.y + 8, Math.min(maxY, tooltipY));
         this.statusTooltip.set_position(tooltipX, tooltipY);
     }
@@ -2050,7 +2075,7 @@ class NetworkSetting {
         let icon = new St.Icon({
             gicon: gicon,
             style_class: 'feature-icon-net',
-            icon_size: 26
+            icon_size: 25
         });
 
         button.set_child(icon);
@@ -2247,19 +2272,50 @@ class NetworkSetting {
 
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
-        if (!monitor || !this.container || this.container.width <= 0) return;
+        if (!monitor) return;
 
-        let targetX = Math.round(monitor.x + monitor.width - this.container.width - 20);
-        let targetY = Math.round(monitor.y + 23);
-        
-        let currentX = Math.round(this.container.x);
-        let currentY = Math.round(this.container.y);
+        let targetY = Math.round(monitor.y + 11);
 
-        if (currentX !== targetX || currentY !== targetY) {
-            this.container.set_position(targetX, targetY);
+        if (this.container && this.container.width > 0) {
+            let targetX = Math.round(monitor.x + monitor.width - this.container.width - 15);
+            let currentX = Math.round(this.container.x);
+            let currentY = Math.round(this.container.y);
+
+            if (currentX !== targetX || currentY !== targetY) {
+                this.container.set_position(targetX, targetY);
+            }
+        }
+
+        if (this.clockContainer && this.clockContainer.width > 0) {
+            let clockX = Math.round(monitor.x + 15);
+            let currentClockX = Math.round(this.clockContainer.x);
+            let currentClockY = Math.round(this.clockContainer.y);
+
+            if (currentClockX !== clockX || currentClockY !== targetY) {
+                this.clockContainer.set_position(clockX, targetY);
+            }
         }
     }
 
+    _updateClock() {
+        if (!this.clockLabel) return;
+        let now = new Date();
+        let weekday = now.toLocaleDateString('fr-FR', {
+            weekday: 'short'
+        });
+        let date = now.toLocaleDateString('fr-FR', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+        });
+        let time = now.toLocaleTimeString('fr-FR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        });
+        let formattedWeekday = weekday.charAt(0).toLocaleUpperCase('fr-FR') + weekday.slice(1);
+        this.clockLabel.set_text(`${time}   ${formattedWeekday} ${date}`);
+    }
 
     async _accessibilityMenu() {
         let menuWidth = 280;
@@ -2687,6 +2743,12 @@ class NetworkSetting {
             this._initTimeout = 0;
         }
 
+        if (this._wallClock && this._wallClockSignalId) {
+            this._wallClock.disconnect(this._wallClockSignalId);
+            this._wallClockSignalId = 0;
+        }
+        this._wallClock = null;
+
         for (let connection of this._signalConnections) {
             try { connection.object.disconnect(connection.id); } catch (e) {}
         }
@@ -2714,6 +2776,12 @@ class NetworkSetting {
         if (this.container) {
             this.container.destroy();
             this.container = null;
+        }
+
+        if (this.clockContainer) {
+            this.clockContainer.destroy();
+            this.clockContainer = null;
+            this.clockLabel = null;
         }
 
         this._mixerControl = null;

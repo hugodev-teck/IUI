@@ -14,6 +14,24 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+export function getTopBarTooltipY(monitor) {
+    let bottom = monitor.y + 11;
+    let topBarActors = [
+        global.barReseau ? global.barReseau.container : null,
+        global.barReseau ? global.barReseau.clockContainer : null,
+        global.notificationManager ? global.notificationManager.notificationBox : null
+    ];
+
+    for (let actor of topBarActors) {
+        if (!actor || actor.width <= 0 || actor.height <= 0) continue;
+        let [, actorY] = actor.get_transformed_position();
+        let [, actorHeight] = actor.get_transformed_size();
+        bottom = Math.max(bottom, actorY + actorHeight);
+    }
+
+    return bottom + 4;
+}
+
 export class NotificationManager {
     constructor(ext) {
         this._ext = ext; // Sauvegarde de l'instance de l'extension
@@ -108,7 +126,7 @@ export class NotificationManager {
         this.notificationIcon = new St.Icon({
             gicon: Gio.icon_new_for_string(`${this._ext.path}/icons/interface/notification/bell-white.png`),
             style_class: 'notification-icon',
-            icon_size: 26
+            icon_size: 25
         });
     
         this.notificationButton = new St.Button({
@@ -168,19 +186,19 @@ export class NotificationManager {
         }
 
         this.notificationTooltip.show();
-        let [x, y] = this.notificationButton.get_transformed_position();
-        let [width, height] = this.notificationButton.get_transformed_size();
+        let [x] = this.notificationButton.get_transformed_position();
+        let [width] = this.notificationButton.get_transformed_size();
         let monitor = Main.layoutManager.primaryMonitor;
         let tooltipWidth = this.notificationTooltip.width;
         let tooltipHeight = this.notificationTooltip.height;
         let tooltipX = x + (width - tooltipWidth) / 2;
-        let tooltipY = y + height + 13;
+        let tooltipY = getTopBarTooltipY(monitor);
         let minX = monitor.x + 8;
         let maxX = monitor.x + monitor.width - tooltipWidth - 8;
         let maxY = monitor.y + monitor.height - tooltipHeight - 8;
 
         tooltipX = Math.max(minX, Math.min(maxX, tooltipX));
-        if (tooltipY > maxY) tooltipY = y - tooltipHeight - 8;
+        if (tooltipY > maxY) tooltipY = monitor.y + 11 - tooltipHeight - 8;
         tooltipY = Math.max(monitor.y + 8, Math.min(maxY, tooltipY));
         this.notificationTooltip.set_position(tooltipX, tooltipY);
     }
@@ -193,8 +211,8 @@ export class NotificationManager {
         let monitor = Main.layoutManager.primaryMonitor;
         if (!monitor) return;
         
-        let topOffset = 23;
-        let horizontalOffset = 10;
+        let topOffset = 11;
+        let horizontalOffset = 7;
         let barReseau = global.barReseau; 
         
         let newX, newY;

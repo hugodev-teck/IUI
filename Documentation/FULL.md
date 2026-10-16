@@ -348,9 +348,9 @@ Ouvert quand un clic sur une icône trouve plusieurs fenêtres. Construit un `St
 ## 8. Module Barre Système — `NetworkSetting`
 
 **Fichier :** `extension.js` — classe `NetworkSetting`  
-**Rendu :** `Main.layoutManager._backgroundGroup`, 23px depuis le haut, 20px du bord droit
+**Rendu :** `Main.layoutManager._backgroundGroup` ; barre système à 11px du haut et 15px du bord droit, date à 15px du bord gauche
 
-Barre horizontale de 3 boutons icônes (Wi-Fi, volume, batterie). Les sous-systèmes matériels sont initialisés **500ms après la construction** pour ne pas bloquer le démarrage.
+La barre système affiche 3 boutons icônes (Wi-Fi, volume, batterie). En face, une bulle de même style affiche l'heure locale puis la date complète en français. Elle s'actualise sur le signal `notify::clock` de `GnomeDesktop.WallClock`, sans timer ni polling. Son infobulle indique « Horloge (Heure local) ». Les sous-systèmes matériels sont initialisés **500ms après la construction** pour ne pas bloquer le démarrage.
 
 ### Wi-Fi (`_initNetwork` → `NM.Client`)
 

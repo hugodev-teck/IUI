@@ -8,25 +8,36 @@
     justify-content: center;
 }
 
-.network-settings-container {
+.network-settings-container,
+.clock-date-container {
     background-color: rgba(54, 53, 53, 0.836);
-    padding: 10px;
-    border-radius: 15px;
+    padding: 13px;
+    border-radius: 20px;
     spacing: 5px;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 55px;
+}
+
+.clock-date-label {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 450;
+    margin-left: 6px;
+    margin-right: 6px;
+}
+
+.clock-date-container {
+    min-height: 32px;
 }
 
 .notification-box-container {
     background-color: rgba(54, 53, 53, 0.836);
-    padding: 10px;
-    border-radius: 15px;
+    padding: 13px;
+    border-radius: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 55px;
 }
 
 .app-icon {
@@ -114,7 +125,7 @@
 }
 
 .feature-button-net {
-    padding: 10px;
+    padding: 5px;
 }
 
 .feature-icon {
@@ -227,7 +238,6 @@
 }
 
 .notification-icon {
-    icon-size: 24px;
     margin-left: 3px;
     margin-right: 3px;
 }
