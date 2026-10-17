@@ -1310,7 +1310,6 @@ class MyDock {
             if (!icon || icon._prismDestroyed || !icon._dotContainer) return;
             icon._dotContainer.destroy_all_children();
             
-            const Shell = imports.gi.Shell;
             let app = Shell.AppSystem.get_default().lookup_app(desktopFile);
             
             if (app && app.get_state() === Shell.AppState.RUNNING) {
@@ -1344,7 +1343,6 @@ class MyDock {
 
         if (iconButton && iconButton.get_parent && iconButton.get_parent()) {
             try {
-                const Shell = imports.gi.Shell;
                 let appState = Shell.AppSystem.get_default().lookup_app(desktopFile)?.get_state();
                 iconButton.destroy();
 
