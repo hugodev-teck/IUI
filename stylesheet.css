@@ -141,6 +141,14 @@
     justify-content: space-between;
 }
 
+.quick-settings-page {
+    spacing: 12px;
+}
+
+.options-list {
+    spacing: 6px;
+}
+
 .option-name {
     font-size: 14px;
     margin-top: 10px;
@@ -459,6 +467,82 @@
     align-items: center;
 }
 
+.quick-settings-home {
+    spacing: 10px;
+    x_expand: true;
+}
+
+.quick-power-row {
+    spacing: 4px;
+    x_expand: true;
+    margin-bottom: 5px;
+}
+
+.quick-power-title {
+    color: #e0e0e0;
+    font-size: 22px;
+    font-weight: bold;
+}
+
+.quick-power-btn {
+    width: 40px;
+    height: 40px;
+    padding: 8px;
+    margin: 0;
+}
+
+.quick-connect-row {
+    spacing: 10px;
+    x_expand: true;
+}
+
+.quick-connect-tile {
+    spacing: 12px;
+    border-radius: 14px;
+    align-items: center;
+}
+
+.quick-connect-labels {
+    spacing: 2px;
+}
+
+.quick-connect-subtitle {
+    color: #ccc;
+    font-size: 11px;
+}
+
+.quick-shortcuts-row {
+    spacing: 8px;
+    x_expand: true;
+}
+
+.quick-shortcut-item {
+    spacing: 8px;
+    align-items: center;
+    x_expand: true;
+}
+
+.quick-shortcut-button {
+    min-height: 48px;
+    padding: 8px 4px;
+    border-radius: 16px;
+    color: #e0e0e0;
+}
+
+.quick-shortcut-label {
+    color: #ccc;
+    font-size: 11px;
+    height: 30px;
+    text-align: center;
+}
+
+.quick-slider-group {
+    padding: 12px;
+    border-radius: 14px;
+    spacing: 8px;
+    x_expand: true;
+}
+
 .label {
     color: white;
     font-size: 12px;
@@ -466,20 +550,22 @@
 }
 
 .slider-box-vol {
-    spacing: 10px;
-    margin-bottom: 4px;
-    margin-top: 10px;
+    spacing: 12px;
+    margin: 0;
     align-items: center;
     x_expand: true;
-    justify-content: space-between;
 }
 
 .slider-box-brig {
-    spacing: 10px;
-    margin-bottom: 10px;
+    spacing: 12px;
+    margin: 0;
     align-items: center;
     x_expand: true;
-    justify-content: space-between;
+}
+
+.slider-box-vol StSlider,
+.slider-box-brig StSlider {
+    x_expand: true;
 }
 
 .control-box {
@@ -492,6 +578,12 @@
     background-color: rgba(80, 80, 80, 0.3);
     border-radius: 8px;
     transition: background 0.2s;
+}
+
+.toggle-btn.quick-connect-btn {
+    min-height: 62px;
+    padding: 12px 22px;
+    border-radius: 32px;
 }
 
 .toggle-btn:hover {
@@ -537,12 +629,35 @@
     x_expand: true; 
 }
 
+.quick-bottom-actions {
+    spacing: 12px;
+    x_expand: true;
+}
+
+.quick-wide-button {
+    padding: 16px 12px;
+    border-radius: 14px;
+    color: #ccc;
+}
+
+.quick-wide-button-content {
+    spacing: 10px;
+    align-items: center;
+    justify-content: center;
+}
+
 .menu-battery-box {
     spacing: 6px;
     background-color: rgba(255, 255, 255, 0.1);
     border-radius: 12px;
     padding: 4px 8px;
     align-items: center;
+}
+
+.quick-battery-box {
+    padding: 12px;
+    border-radius: 14px;
+    x_expand: true;
 }
 
 .menu-battery-label {
@@ -563,6 +678,20 @@
 
 .bottom-btn:hover {
     background-color: rgba(180, 180, 180, 0.4);
+}
+
+.quick-shortcut-button,
+.quick-slider-group,
+.quick-wide-button,
+.quick-battery-box,
+.bottom-btn.quick-power-btn {
+    background-color: rgba(80, 80, 80, 0.3);
+}
+
+.quick-shortcut-button:hover,
+.quick-wide-button:hover,
+.bottom-btn.quick-power-btn:hover {
+    background-color: rgba(150, 150, 150, 0.3);
 }
 
 .app-chooser-menu {

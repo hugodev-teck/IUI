@@ -72,7 +72,7 @@ const PRISM_APPS = {
     }
 };
 
-let searchBar, pollingId, homeBar, previousWindow, notificationManager, originalWallpaperUri, myDock, menu, networkSetting, menunet, Volmenu, Accesmenu, superBlock, closeOverviewTimeout, monitor;
+let searchBar, pollingId, homeBar, previousWindow, notificationManager, originalWallpaperUri, myDock, menu, networkSetting, menunet, Volmenu, superBlock, closeOverviewTimeout, monitor;
 let _isPC = false;
 
 class MyDock {
@@ -2020,7 +2020,7 @@ class NetworkSetting {
     }
 
     _showStatusTooltip(button, type) {
-        if (this._mainMenuOpen || this._tooltipsLocked || menunet || Accesmenu) return;
+        if (this._mainMenuOpen || this._tooltipsLocked || menunet) return;
 
         if (!this.statusTooltip) {
             this.statusTooltip = new St.Label({
@@ -2098,7 +2098,6 @@ class NetworkSetting {
     
     _closeAllMenus() {
         if (menunet) { menunet.destroy(); menunet = null; }
-        if (Accesmenu) { Accesmenu.destroy(); Accesmenu = null; }
     }
 
     _initAudio() {
@@ -2317,102 +2316,107 @@ class NetworkSetting {
         this.clockLabel.set_text(`${time}   ${formattedWeekday} ${date}`);
     }
 
-    async _accessibilityMenu() {
-        let menuWidth = 280;
-        let menuHeight = 310;
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
+    _showQuickSettingsPage(title, buildContent) {
+        if (!menunet || !this._quickSettingsHome) return;
 
-        let topOffset = 110;
-        let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
-    
-        let menu = new St.BoxLayout({
+        if (this._quickSettingsPage) {
+            this._quickSettingsPage.destroy();
+            this._quickSettingsPage = null;
+        }
+
+        let page = new St.BoxLayout({
             vertical: true,
-            name: 'net-box-menu',
-            style_class: 'net-box',
-            reactive: true
+            style_class: 'quick-settings-page',
+            x_expand: true,
+            y_expand: true
         });
-    
         let header = new St.BoxLayout({
             vertical: false,
-            name: 'header-acess',
-            style_class: 'header-accessibility'
+            style_class: 'header-accessibility',
+            x_expand: true
         });
-    
-        let title = new St.Label({
-            text: 'Options d\'accessibilité',
-            style_class: 'label-title'
+        let backButton = new St.Button({
+            style_class: 'toggle-btn',
+            child: new St.Icon({ icon_name: 'go-previous-symbolic', icon_size: 16 })
         });
-    
-        header.add_child(title);
-        menu.add_child(header);
-    
-        let optionsList = new St.BoxLayout({
-            vertical: true,
-            name: 'option-list',
-            style_class: 'options-list'
+        backButton.connect('clicked', () => this._showQuickSettingsHome());
+
+        let pageTitle = new St.Label({
+            text: title,
+            style_class: 'label-title',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true
         });
-    
-        menu.add_child(optionsList);
-    
+        header.add_child(backButton);
+        header.add_child(pageTitle);
+        page.add_child(header);
+        page.add_child(buildContent());
+
+        this._quickSettingsHome.hide();
+        menunet.add_child(page);
+        this._quickSettingsPage = page;
+    }
+
+    _showQuickSettingsHome() {
+        if (this._quickSettingsPage) {
+            this._quickSettingsPage.destroy();
+            this._quickSettingsPage = null;
+        }
+        if (this._quickSettingsHome) this._quickSettingsHome.show();
+    }
+
+    _showAccessibilityPage() {
         let settings = [
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-keyboard-enabled', name: 'Clavier à l\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-magnifier-enabled', name: 'Loupe d\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-reader-enabled', name: 'Lecteur d\'écran' },
             { schema: 'org.gnome.desktop.a11y.interface', key: 'high-contrast', name: 'Contraste élevé' }
         ];
-    
-        settings.forEach(setting => {
-            let item = new St.BoxLayout({
-                vertical: false,
-                name: 'option-item-box',
-                style_class: 'option-item'
+
+        this._showQuickSettingsPage('Accessibilité', () => {
+            let optionsList = new St.BoxLayout({
+                vertical: true,
+                style_class: 'options-list',
+                x_expand: true,
+                y_expand: true
             });
-    
-            let label = new St.Label({
-                text: setting.name,
-                style_class: 'option-label'
-            });
-    
-            let button = new St.Button({
-                style_class: 'option-button',
-                reactive: true
-            });
-    
             let iconPathOn = `${this._ext.path}/icons/interface/toggle/toggle-button-on.png`;
             let iconPathOff = `${this._ext.path}/icons/interface/toggle/toggle-button-off.png`;
-    
-            let icon = new St.Icon({
-                gicon: Gio.icon_new_for_string(this._getSetting(setting.schema, setting.key) ? iconPathOn : iconPathOff),
-                style_class: 'option-icon',
-                icon_size: 24
+
+            settings.forEach(setting => {
+                let item = new St.BoxLayout({
+                    vertical: false,
+                    style_class: 'option-item',
+                    x_expand: true
+                });
+                let label = new St.Label({
+                    text: setting.name,
+                    style_class: 'option-label',
+                    y_align: Clutter.ActorAlign.CENTER,
+                    x_expand: true
+                });
+                let button = new St.Button({
+                    style_class: 'option-button',
+                    reactive: true
+                });
+                let icon = new St.Icon({
+                    gicon: Gio.icon_new_for_string(this._getSetting(setting.schema, setting.key) ? iconPathOn : iconPathOff),
+                    style_class: 'option-icon',
+                    icon_size: 24
+                });
+                button.set_child(icon);
+                button.connect('clicked', () => {
+                    let newState = !this._getSetting(setting.schema, setting.key);
+                    this._setSetting(setting.schema, setting.key, newState);
+                    icon.gicon = Gio.icon_new_for_string(newState ? iconPathOn : iconPathOff);
+                });
+
+                item.add_child(label);
+                item.add_child(button);
+                optionsList.add_child(item);
             });
-    
-            button.set_child(icon);
-    
-            button.connect('clicked', () => {
-                let currentState = this._getSetting(setting.schema, setting.key);
-                let newState = !currentState;
-                this._setSetting(setting.schema, setting.key, newState);
-    
-                icon.gicon = Gio.icon_new_for_string(newState ? iconPathOn : iconPathOff);
-            });
-    
-            item.add_child(label);
-            item.add_child(button);
-    
-            optionsList.add_child(item);
+            return optionsList;
         });
-    
-        menu.set_position(menuX, menuY);
-        menu.set_size(menuWidth, menuHeight);
-    
-        Main.layoutManager.addChrome(menu);
-    
-        menu.connect('destroy', () => {
-            Main.layoutManager.removeChrome(menu);
-        });
-    
-        return menu;
     }
 
     _getSetting(schema, settingKey) {
@@ -2444,125 +2448,215 @@ class NetworkSetting {
         this._tooltipsLocked = true;
         this._hideStatusTooltip();
 
-        let menunetWidth = 267;
-        let menunetHeight = 375;
         let monitor = Main.layoutManager.primaryMonitor;
+        let menunetWidth = Math.min(420, monitor.width - 32);
+        let menunetHeight = Math.min(_isPC ? 430 : 485, monitor.height - 32);
         let menunetX = Math.floor((monitor.x + monitor.width - menunetWidth) - 20);
-        let topOffset = 110;
-        let menunetY = monitor.y + topOffset;
+        let topBarBottom = this.container
+            ? this.container.y + this.container.height
+            : monitor.y + 65;
+        let menunetY = Math.min(topBarBottom + 5, monitor.y + monitor.height - menunetHeight + 4);
 
         menunet = new St.BoxLayout({
             vertical: true,
             name: 'net-boxmn',
             style_class: 'net-boxmn'
         });
+        this._quickSettingsHome = new St.BoxLayout({
+            vertical: true,
+            style_class: 'quick-settings-home',
+            x_expand: true,
+            y_expand: true
+        });
+        this._quickSettingsPage = null;
 
         menunet.set_position(menunetX, menunetY);
 
-        if(_isPC) {
-            menunet.set_size(menunetWidth, menunetHeight - 43);
-        } else {
-            menunet.set_size(menunetWidth, menunetHeight);
-        }
+        menunet.set_size(menunetWidth, menunetHeight);
         
-        let now = new Date();
-        let dateLabel = new St.Label({ text: now.toLocaleDateString(), style_class: 'date-labelmn' });
-        let timeLabel = new St.Label({ text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), style_class: 'time-labelmn' });
-        let dateBox = new St.BoxLayout({ vertical: true, name: 'datetime-box', style_class: 'datetime-box' });
-        dateBox.add_child(timeLabel);
-        dateBox.add_child(dateLabel);
-
-        function createToggleRow(iconName, title) {
-            let row = new St.BoxLayout({ 
-                vertical: false, 
-                name: 'tgl-row', 
-                style_class: 'toggle-row',
-                x_expand: true,
-                x_align: Clutter.ActorAlign.START
-            });
-            
-            let icon = new St.Icon({ icon_name: iconName, icon_size: 18, style_class: 'toggle-icon' });
-            let label = new St.Label({ text: title, style_class: 'toggle-label', y_align: Clutter.ActorAlign.CENTER });
-
-            row.add_child(icon);
-            row.add_child(label);
-
-            let btn = new St.Button({ 
-                style_class: 'toggle-btn',
-                x_expand: true,
-                x_align: Clutter.ActorAlign.FILL
-            });
-            btn.set_child(row);
-            return btn;
-        }
-
-        let wifiBtn = createToggleRow('network-wireless-symbolic', 'Wi-Fi');
-        let bleBtn = createToggleRow('bluetooth-symbolic', 'Bluetooth');
-        let accBtn = createToggleRow('preferences-desktop-accessibility-symbolic', 'Accessibilité');
-
-        let controlBox = new St.BoxLayout({
-            vertical: true,
-            name: 'control-box',
-            style_class: 'control-box',
+        let powerButtonsBox = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-power-row',
             x_expand: true,
             x_align: Clutter.ActorAlign.FILL
         });
+        let quickSettingsTitle = new St.Label({
+            text: 'Centre de contrôle',
+            style_class: 'quick-power-title',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        let logoutBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-log-out-symbolic' })
+        });
+        let rebootBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-reboot-symbolic' })
+        });
+        let shutdownBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-shutdown-symbolic' })
+        });
+        logoutBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('gnome-session-quit --logout'); });
+        rebootBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl reboot'); });
+        shutdownBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl poweroff'); });
+        powerButtonsBox.add_child(quickSettingsTitle);
+        powerButtonsBox.add_child(logoutBtn);
+        powerButtonsBox.add_child(rebootBtn);
+        powerButtonsBox.add_child(shutdownBtn);
 
+        function createToggleTile(iconName, title, subtitle) {
+            let tile = new St.BoxLayout({
+                vertical: false,
+                style_class: 'quick-connect-tile',
+                x_expand: true
+            });
+            let icon = new St.Icon({
+                icon_name: iconName,
+                icon_size: 24,
+                style_class: 'toggle-icon'
+            });
+            let labels = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-connect-labels',
+                x_expand: true
+            });
+            labels.add_child(new St.Label({ text: title, style_class: 'toggle-label' }));
+            labels.add_child(new St.Label({ text: subtitle, style_class: 'quick-connect-subtitle' }));
+            tile.add_child(icon);
+            tile.add_child(labels);
+            let button = new St.Button({
+                style_class: 'toggle-btn quick-connect-btn',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
+                child: tile
+            });
+            button.set_width(Math.floor((menunetWidth - 30 - 10) / 2));
+            return button;
+        }
+
+        let controlBox = new St.BoxLayout({
+            vertical: false,
+            name: 'control-box',
+            style_class: 'quick-connect-row',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
+        });
         controlBox.set_width(menunetWidth - 30);
 
-        wifiBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._closeAllMenus();
-                
-                if (global.notificationManager) {
-                    global.notificationManager.showNotification(
-                        "Wi-Fi", 
-                        "Cette fonctionnalité est en cours de développement.", 
-                        "Système", 
-                        "network-wireless-symbolic"
-                    );
-                }
-                return GLib.SOURCE_REMOVE;
-            });
-        });
+        let wifiBtn = createToggleTile('network-wireless-symbolic', 'Wi-Fi', 'Gérer le réseau');
+        let bleBtn = createToggleTile('bluetooth-symbolic', 'Bluetooth', 'Appareils');
 
-        bleBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._closeAllMenus();
-                
-                if (global.notificationManager) {
-                    global.notificationManager.showNotification(
-                        "Bluetooth", 
-                        "Cette fonctionnalité est en cours de développement.", 
-                        "Système", 
-                        "bluetooth-symbolic"
-                    );
-                }
-                return GLib.SOURCE_REMOVE;
+        wifiBtn.connect('clicked', () => this._showQuickSettingsPage('Wi-Fi', () => {
+            let details = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-settings-details',
+                x_expand: true
             });
-        });
+            details.add_child(new St.Icon({
+                icon_name: 'network-wireless-symbolic',
+                icon_size: 36,
+                style_class: 'toggle-icon'
+            }));
+            details.add_child(new St.Label({
+                text: this._getStatusTooltipText('wifi'),
+                style_class: 'toggle-label',
+                x_expand: true
+            }));
+            return details;
+        }));
 
-        accBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                if (Accesmenu) {
-                    Accesmenu.destroy();
-                    Accesmenu = null;
-                } else {
-                    this._closeAllMenus();
-                    this._accessibilityMenu().then(m => Accesmenu = m).catch(e => log(e));
-                }
-                return GLib.SOURCE_REMOVE;
+        bleBtn.connect('clicked', () => this._showQuickSettingsPage('Bluetooth', () => {
+            let details = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-settings-details',
+                x_expand: true
             });
-        });
+            details.add_child(new St.Icon({
+                icon_name: 'bluetooth-symbolic',
+                icon_size: 36,
+                style_class: 'toggle-icon'
+            }));
+            details.add_child(new St.Label({
+                text: 'La gestion des appareils Bluetooth sera disponible ici.',
+                style_class: 'toggle-label',
+                x_expand: true
+            }));
+            return details;
+        }));
 
         controlBox.add_child(wifiBtn);
         controlBox.add_child(bleBtn);
-        controlBox.add_child(accBtn);
 
-        let volumeLabel = new St.Label({ text: "Volume", style_class: 'label' });
+        let shortcutsRow = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-shortcuts-row',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
+        });
+        let shortcutsRowWidth = menunetWidth - 30;
+        shortcutsRow.set_width(shortcutsRowWidth);
+        let shortcuts = [
+            { icon: 'airplane-mode-symbolic', title: 'Mode avion', label: 'Mode\navion' },
+            { icon: 'weather-clear-night-symbolic', title: 'Thème sombre', label: 'Thème\nsombre' },
+            { icon: 'battery-low-symbolic', title: 'Économie d’énergie', label: 'Économie\nd’énergie' },
+            { icon: 'network-wireless-hotspot-symbolic', title: 'Point d’accès', label: 'Point\nd’accès' },
+            { icon: 'night-light-symbolic', title: 'Éclairage nocturne', label: 'Éclairage\nnocturne' }
+        ];
+        let shortcutCellBaseWidth = Math.floor((shortcutsRowWidth - 32) / shortcuts.length);
+        let shortcutCellExtraPixels = (shortcutsRowWidth - 32) % shortcuts.length;
+        for (let [index, shortcut] of shortcuts.entries()) {
+            let shortcutCellWidth = shortcutCellBaseWidth + (index < shortcutCellExtraPixels ? 1 : 0);
+            let shortcutBox = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-shortcut-item',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL
+            });
+            shortcutBox.set_width(shortcutCellWidth);
+            let shortcutIcon = new St.Icon({ icon_name: shortcut.icon, icon_size: 18 });
+            shortcutIcon.set_size(24, 24);
+            let shortcutButton = new St.Button({
+                style_class: 'quick-shortcut-button',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
+                child: shortcutIcon
+            });
+            shortcutButton.connect('clicked', () => {
+                if (global.notificationManager) {
+                    global.notificationManager.showNotification(
+                        shortcut.title,
+                        'Cette fonctionnalité est en cours de développement.',
+                        'Système',
+                        shortcut.icon
+                    );
+                }
+            });
+            shortcutBox.add_child(shortcutButton);
+            let shortcutLabel = new St.Label({
+                text: shortcut.label,
+                style_class: 'quick-shortcut-label',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
+            });
+            shortcutLabel.set_width(shortcutCellWidth);
+            shortcutLabel.clutter_text.set_line_wrap(false);
+            shortcutLabel.clutter_text.set_line_alignment(Pango.Alignment.CENTER);
+            shortcutBox.add_child(shortcutLabel);
+            shortcutsRow.add_child(shortcutBox);
+        }
+
+        let sliderGroup = new St.BoxLayout({
+            vertical: true,
+            style_class: 'quick-slider-group',
+            x_expand: true
+        });
         let volumeSlider = new Slider.Slider(0.5);
+        volumeSlider.x_expand = true;
         let volumeBox = new St.BoxLayout({ name: 'vlm-box', vertical: false, style_class: 'slider-box-vol' });
-        volumeBox.add_child(volumeLabel);
+        volumeBox.add_child(new St.Icon({ icon_name: 'audio-volume-high-symbolic', icon_size: 22, style_class: 'toggle-icon' }));
         volumeBox.add_child(volumeSlider);
 
         let stream = this._mixerControl ? this._mixerControl.get_default_sink() : null;
@@ -2579,10 +2673,10 @@ class NetworkSetting {
             }
         });
 
-        let brightLabel = new St.Label({ text: "Luminosité", style_class: 'label' });
         let brightSlider = new Slider.Slider(0);
+        brightSlider.x_expand = true;
         let brightBox = new St.BoxLayout({ name: 'brightbox', vertical: false, style_class: 'slider-box-brig' });
-        brightBox.add_child(brightLabel);
+        brightBox.add_child(new St.Icon({ icon_name: 'display-brightness-symbolic', icon_size: 22, style_class: 'toggle-icon' }));
         brightBox.add_child(brightSlider);
 
         if (_isPC) {
@@ -2644,49 +2738,88 @@ class NetworkSetting {
             );
         }
 
-        let bottomBox = new St.BoxLayout({ name: 'bottomBox', style_class: 'bottom-box', vertical: false });
-        let powerButtonsBox = new St.BoxLayout({ name: 'powerbtn', style_class: 'power-buttons-box' });
-        
-        let logoutBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-log-out-symbolic' }) });
-        let rebootBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-reboot-symbolic' }) });
-        let shutdownBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-shutdown-symbolic' }) });
+        sliderGroup.add_child(volumeBox);
+        sliderGroup.add_child(brightBox);
 
-        logoutBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('gnome-session-quit --logout'); });
-        rebootBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl reboot'); });
-        shutdownBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl poweroff'); });
+        let bottomActions = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-bottom-actions',
+            x_expand: true
+        });
+        let accessibilityContent = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-wide-button-content'
+        });
+        accessibilityContent.add_child(new St.Icon({
+            icon_name: 'preferences-desktop-accessibility-symbolic',
+            icon_size: 22
+        }));
+        accessibilityContent.add_child(new St.Label({ text: 'Accessibilité' }));
+        let accessibilityButton = new St.Button({
+            style_class: 'quick-wide-button',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL,
+            child: accessibilityContent
+        });
+        accessibilityButton.connect('clicked', () => this._showAccessibilityPage());
 
-        powerButtonsBox.add_child(logoutBtn);
-        powerButtonsBox.add_child(rebootBtn);
-        powerButtonsBox.add_child(shutdownBtn);
-
-        bottomBox.add_child(powerButtonsBox);
-        bottomBox.add_child(new St.Widget({ x_expand: true }));
-
-        if (!_isPC) {
-            let batteryBox = new St.BoxLayout({ name: 'mn-bat-box', style_class: 'menu-battery-box', vertical: false });
-            let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
-            let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
-
-            if (this._upClient) {
-                let device = this._upClient.get_display_device();
-                if (device) {
-                    batteryLabel.text = `${Math.round(device.percentage)}%`;
-                    let baseName = device.percentage < 10 ? 'battery-emptywth' : (device.percentage < 35 ? 'battery-quarterwth' : (device.percentage < 60 ? 'battery-halfwth' : (device.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
-                    let file = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${device.state === UPowerGlib.DeviceState.CHARGING ? '-ch' : ''}.png`);
-                    if (file.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: file });
-                }
+        let projectorContent = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-wide-button-content'
+        });
+        projectorContent.add_child(new St.Icon({ icon_name: 'video-display-symbolic', icon_size: 22 }));
+        projectorContent.add_child(new St.Label({ text: 'Projecter' }));
+        let projectorButton = new St.Button({
+            style_class: 'quick-wide-button',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL,
+            child: projectorContent
+        });
+        projectorButton.connect('clicked', () => {
+            this._closeAllMenus();
+            try {
+                GLib.spawn_command_line_async('gnome-control-center display');
+            } catch (e) {
+                log(`[PrismUI] Impossible d'ouvrir les paramètres d'affichage : ${e.message}`);
             }
+        });
+        bottomActions.add_child(accessibilityButton);
+        bottomActions.add_child(projectorButton);
 
-            batteryBox.add_child(batteryLabel);
+        let batteryBox = null;
+        if (!_isPC) {
+            batteryBox = new St.BoxLayout({
+                name: 'mn-bat-box',
+                style_class: 'menu-battery-box quick-battery-box',
+                vertical: false,
+                x_expand: true
+            });
+            let batteryIcon = new St.Icon({ icon_size: 24, style_class: 'menu-battery-icon' });
+            let batteryLabel = new St.Label({
+                text: 'Batterie indisponible',
+                style_class: 'menu-battery-label',
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
+            });
+            let batteryDevice = this._upClient ? this._upClient.get_display_device() : null;
+            if (batteryDevice) {
+                let charging = batteryDevice.state === UPowerGlib.DeviceState.CHARGING;
+                batteryLabel.text = `${Math.round(batteryDevice.percentage)}%${charging ? ' - En charge' : ''}`;
+                let baseName = batteryDevice.percentage < 10 ? 'battery-emptywth' : (batteryDevice.percentage < 35 ? 'battery-quarterwth' : (batteryDevice.percentage < 60 ? 'battery-halfwth' : (batteryDevice.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
+                let batteryFile = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${charging ? '-ch' : ''}.png`);
+                if (batteryFile.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: batteryFile });
+            }
             batteryBox.add_child(batteryIcon);
-            bottomBox.add_child(batteryBox);
+            batteryBox.add_child(batteryLabel);
         }
 
-        menunet.add_child(dateBox);
-        menunet.add_child(controlBox);
-        menunet.add_child(volumeBox);
-        menunet.add_child(brightBox);
-        menunet.add_child(bottomBox);
+        this._quickSettingsHome.add_child(powerButtonsBox);
+        this._quickSettingsHome.add_child(controlBox);
+        this._quickSettingsHome.add_child(shortcutsRow);
+        this._quickSettingsHome.add_child(sliderGroup);
+        this._quickSettingsHome.add_child(bottomActions);
+        if (batteryBox) this._quickSettingsHome.add_child(batteryBox);
+        menunet.add_child(this._quickSettingsHome);
         Main.layoutManager.addChrome(menunet);
 
         let stageEventId = global.stage.connect('captured-event', (stage, event) => {
@@ -2732,6 +2865,8 @@ class NetworkSetting {
             Main.layoutManager.removeChrome(menunet);
             oldDestroy();
             menunet = null;
+            this._quickSettingsHome = null;
+            this._quickSettingsPage = null;
         };
 
         return menunet;
