@@ -37,6 +37,7 @@ export class NotificationManager {
         this._ext = ext; // Sauvegarde de l'instance de l'extension
         this.notifications = [];
         this._notificationTimeouts = new Set();
+        this._sourceConnections = new Map();
         this.soundEnabled = true;
         this.dndEnabled = false;
 
@@ -734,6 +735,18 @@ export class NotificationManager {
             this._sourceAddedSignal = null;
         }
 
+        for (let [source, connection] of this._sourceConnections) {
+            for (let signalId of [connection.notificationId, connection.destroyId]) {
+                if (!signalId) continue;
+                try {
+                    source.disconnect(signalId);
+                } catch (e) {
+                    log(`[PrismUI] Impossible de déconnecter un signal de notification : ${e.message}`);
+                }
+            }
+        }
+        this._sourceConnections.clear();
+
         if (this.notificationContainer) {
             Main.layoutManager.removeChrome(this.notificationContainer);
             this.notificationContainer.destroy();
@@ -760,6 +773,8 @@ export class NotificationManager {
 
     _setupNotificationListener() {
         this._sourceAddedSignal = Main.messageTray.connect('source-added', (tray, source) => {
+            if (this._sourceConnections.has(source)) return;
+
             let notifAddedSignal = source.connect('notification-added', (source, notification) => {
                 // 1. On empêche l'OS d'afficher sa propre bannière/popup native
                 if (notification && typeof notification.setUrgency === 'function') {
@@ -806,8 +821,17 @@ export class NotificationManager {
                 });
             });
 
-            source.connect('destroy', () => {
-                try { source.disconnect(notifAddedSignal); } catch (e) {}
+            let destroySignal = source.connect('destroy', () => {
+                this._sourceConnections.delete(source);
+                try {
+                    source.disconnect(notifAddedSignal);
+                } catch (e) {
+                    log(`[PrismUI] Impossible de déconnecter le signal notification-added : ${e.message}`);
+                }
+            });
+            this._sourceConnections.set(source, {
+                notificationId: notifAddedSignal,
+                destroyId: destroySignal
             });
         });
     }

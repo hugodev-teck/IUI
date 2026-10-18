@@ -3,9 +3,6 @@
     padding: 10px;
     border-radius: 15px;
     spacing: 5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .network-settings-container,
@@ -14,9 +11,6 @@
     padding: 13px;
     border-radius: 20px;
     spacing: 5px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .clock-date-label {
@@ -35,9 +29,6 @@
     background-color: rgba(54, 53, 53, 0.836);
     padding: 13px;
     border-radius: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .app-icon {
@@ -69,14 +60,9 @@
 }
 
 .search-entry {
-    padding: 5px;
-    align-items: center;
-    margin-top: 0px;
-}
-
-.search-entry {
     font-size: 14px;
     padding: 5px;
+    margin-top: 0px;
     border: 1px solid #ccc;
     border-radius: 5px;
     x_expand: true;
@@ -137,12 +123,134 @@
     padding: 10px;
     border-radius: 5px;
     margin-bottom: 10px;
-    align-items: center;
-    justify-content: space-between;
 }
 
 .quick-settings-page {
     spacing: 12px;
+}
+
+.quick-page-header {
+    spacing: 10px;
+    padding: 8px 12px;
+    min-height: 38px;
+    border-radius: 12px;
+    background-color: #383838;
+}
+
+.quick-page-header-icon {
+    color: #dedede;
+}
+
+.quick-page-title {
+    color: #f2f2f2;
+    font-size: 15px;
+    font-weight: bold;
+}
+
+.quick-settings-details {
+    spacing: 12px;
+}
+
+.quick-network-details {
+    padding-top: 4px;
+}
+
+.quick-info-section {
+    spacing: 8px;
+}
+
+.quick-section-title {
+    color: #f2f2f2;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 2px 3px;
+}
+
+.quick-info-card,
+.quick-device-card {
+    padding: 12px;
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.quick-info-message {
+    color: #d0d0d0;
+    font-size: 13px;
+}
+
+.quick-device-list {
+    spacing: 8px;
+}
+
+.quick-device-card {
+    spacing: 10px;
+}
+
+.quick-device-labels {
+    spacing: 4px;
+}
+
+.quick-device-name {
+    color: #f2f2f2;
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.quick-device-status,
+.quick-field-label {
+    color: #bdbdbd;
+    font-size: 11px;
+}
+
+.quick-device-action {
+    padding: 7px 10px;
+    border-radius: 8px;
+    color: #f2f2f2;
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.quick-device-action:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.quick-hotspot-credentials {
+    spacing: 8px;
+}
+
+.quick-hotspot-entry {
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 8px;
+    color: #f2f2f2;
+    background-color: rgba(0, 0, 0, 0.22);
+    selection-background-color: #737373;
+}
+
+.quick-hotspot-save {
+    margin-top: 4px;
+}
+
+.quick-hotspot-details {
+    spacing: 10px;
+}
+
+.quick-hotspot-qr-page {
+}
+
+.quick-hotspot-qr {
+    background-color: #fff;
+    border-radius: 10px;
+    padding: 8px;
+}
+
+.quick-hotspot-install-button {
+    padding: 8px 14px;
+    border-radius: 8px;
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+.quick-hotspot-install-button:hover {
+    background-color: rgba(255, 255, 255, 0.22);
 }
 
 .options-list {
@@ -159,33 +267,25 @@
     padding: 10px;
     background-color: #383838;
     color: #ccc;
-    display: flex;
     border-radius: 14px;
-    justify-content: space-between;
 }
 .header-bluetooth {
     padding: 10px;
     background-color: #383838;
     color: #ccc;
-    display: flex;
     border-radius: 14px;
-    justify-content: space-between;
 }
 .header-accessibility {
     padding: 10px;
     background-color: #383838;
     color: #ccc;
-    display: flex;
     border-radius: 14px;
-    justify-content: space-between;
 }
 .header-volume {
     padding: 10px;
     background-color: #383838;
     color: #ccc;
-    display: flex;
     border-radius: 14px;
-    justify-content: space-between;
 }
 
 .label-title {
@@ -250,21 +350,6 @@
     margin-right: 3px;
 }
 
-.notification-history-container {
-    background-color: rgba(30, 30, 30, 0.95);
-    border-radius: 12px;
-    padding: 15px;
-    border: 1px solid rgba(90, 90, 90, 0.5);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
-    
-    /* Le ScrollView gère déjà le défilement, on ne met SURTOUT PAS d'overflow ni de max-height ici ! */
-    
-    /* Personnalisation de la barre de défilement */
-    -st-bar-background-color: rgba(0, 0, 0, 0.2);
-    -st-handle-border-radius: 6px;
-    -st-handle-background-color: rgba(255, 255, 255, 0.3);
-}
-
 .date-label {
     font-size: 18px;
     margin-bottom: 5px;
@@ -284,7 +369,6 @@
 
 .connexion-button:hover {
     background-color: #45a049;
-    cursor: pointer;
 }
 
 .volume-slider-container {
@@ -304,7 +388,6 @@
 .volume-indicator {
     background-color: #d4d4d4;
     width: 0;
-    transition: width 0.1s;
     border-radius: 4px;
 }
 
@@ -333,8 +416,6 @@
     line-height: 36px;
     border: none;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    cursor: pointer;
-    transition: background-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .pkeyboard-container .button:hover {
@@ -419,8 +500,6 @@
     background-color: #2c2c2c;
     padding: 10px;
     border-radius: 8px;
-    align-items: center;
-    justify-content: center;
 }
 
 .feature-label {
@@ -444,7 +523,6 @@
 
 .menu-bottom-row {
     spacing: 10px;
-    justify-content: center;
     margin-top: 10px;
 }
 
@@ -464,7 +542,6 @@
     padding: 15px;
     spacing: 12px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-    align-items: center;
 }
 
 .quick-settings-home {
@@ -486,6 +563,7 @@
 
 .quick-power-btn {
     width: 40px;
+    color: #fff;
     height: 40px;
     padding: 8px;
     margin: 0;
@@ -499,7 +577,25 @@
 .quick-connect-tile {
     spacing: 12px;
     border-radius: 14px;
-    align-items: center;
+}
+
+.quick-connect-icon-circle {
+    width: 42px;
+    height: 42px;
+    border-radius: 21px;
+    background-color: rgba(82, 82, 82, 0.874);
+}
+
+.quick-connect-icon-circle .toggle-icon {
+    color: #a8a8a8;
+}
+
+.quick-connect-icon-circle.active {
+    background-color: #737373;
+}
+
+.quick-connect-icon-circle.active .toggle-icon {
+    color: #000;
 }
 
 .quick-connect-labels {
@@ -518,7 +614,6 @@
 
 .quick-shortcut-item {
     spacing: 8px;
-    align-items: center;
     x_expand: true;
 }
 
@@ -527,6 +622,21 @@
     padding: 8px 4px;
     border-radius: 16px;
     color: #e0e0e0;
+}
+
+.quick-shortcut-item.active {
+    background-color: #737373;
+    color: #000;
+    border-radius: 16px;
+}
+
+.quick-shortcut-item.active .quick-shortcut-button {
+    background-color: transparent;
+}
+
+.quick-shortcut-item.active .quick-shortcut-label,
+.quick-shortcut-item.active StIcon {
+    color: #000;
 }
 
 .quick-shortcut-label {
@@ -552,20 +662,32 @@
 .slider-box-vol {
     spacing: 12px;
     margin: 0;
-    align-items: center;
     x_expand: true;
 }
 
 .slider-box-brig {
     spacing: 12px;
     margin: 0;
-    align-items: center;
     x_expand: true;
 }
 
 .slider-box-vol StSlider,
 .slider-box-brig StSlider {
     x_expand: true;
+}
+
+.slider-box-vol StIcon,
+.slider-box-brig StIcon {
+    color: #e0e0e0;
+}
+
+.slider-box-vol .slider,
+.slider-box-brig .slider {
+    color: #e0e0e0;
+    -barlevel-active-background-color: #e0e0e0;
+    -barlevel-background-color: rgba(224, 224, 224, 0.3);
+    -slider-handle-background-color: #e0e0e0;
+    -slider-handle-border-color: #e0e0e0;
 }
 
 .control-box {
@@ -577,7 +699,6 @@
     padding: 6px 10px;
     background-color: rgba(80, 80, 80, 0.3);
     border-radius: 8px;
-    transition: background 0.2s;
 }
 
 .toggle-btn.quick-connect-btn {
@@ -592,8 +713,6 @@
 
 .toggle-row {
     spacing: 12px;
-    align-items: center;
-    justify-content: flex-start;
     padding: 6px 0;
 }
 
@@ -607,7 +726,6 @@
 }
 
 .datetime-box {
-    align-items: center;
     margin: 5px 0;
 }
 
@@ -625,7 +743,6 @@
 .bottom-box {
     spacing: 20px;
     margin-top: 2px;
-    justify-content: center;
     x_expand: true; 
 }
 
@@ -642,8 +759,6 @@
 
 .quick-wide-button-content {
     spacing: 10px;
-    align-items: center;
-    justify-content: center;
 }
 
 .menu-battery-box {
@@ -651,7 +766,6 @@
     background-color: rgba(255, 255, 255, 0.1);
     border-radius: 12px;
     padding: 4px 8px;
-    align-items: center;
 }
 
 .quick-battery-box {
@@ -673,7 +787,6 @@
     background-color: rgba(100, 100, 100, 0.3);
     border-radius: 50px;
     padding: 8px;
-    transition: background 0.2s;
 }
 
 .bottom-btn:hover {
@@ -700,7 +813,6 @@
     padding: 8px;
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
     color: white;
-    transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
 .app-chooser-item {
@@ -727,14 +839,6 @@
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     text-align: center;
-    transition: opacity 0.15s ease;
-}
-
-.window-list-popup {
-  background-color: rgba(30, 30, 30, 0.9);
-  border-radius: 10px;
-  padding: 6px;
-  spacing: 3px;
 }
 
 .window-list-menu {
@@ -758,7 +862,6 @@
 .window-list-item {
     padding: 6px 10px;
     border-radius: 6px;
-    transition: background-color 0.12s;
 }
 
 .window-list-item:hover {
@@ -796,21 +899,6 @@
   margin-right: 8px;
 }
 
-.notification-history-container {
-    background-color: rgba(45, 45, 45, 0.98);
-    border-radius: 12px;
-    padding: 15px 15px 15px 15px;
-    border: 1px solid rgba(90, 90, 90, 0.5);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.6);
-    
-    max-height: 80vh; 
-    overflow: auto;
-    
-    -st-bar-background-color: rgba(0, 0, 0, 0.2);
-    -st-handle-border-radius: 6px;
-    -st-handle-background-color: rgba(255, 255, 255, 0.3);
-}
-
 .notification-history-title {
     color: #ffffff;
     font-size: 1.6em;
@@ -837,8 +925,6 @@
 .search-filter-box {
     padding: 5px 0;
     margin-bottom: 5px;
-    align-items: center;
-    justify-content: flex-start;
 }
 
 .search-filter-btn {
@@ -983,7 +1069,6 @@
 
 .prism-about-content {
     spacing: 20px;
-    align-items: center;
 }
 
 .prism-about-logo {
@@ -1011,7 +1096,6 @@
 
 .search-result-row {
     margin: 2px 5px;
-    transition: all 0.2s;
 }
 
 .searchbar-results-scroll StScrollBar StBin {
@@ -1046,7 +1130,6 @@
     background-color: rgba(255, 255, 255, 0.05);
     border-radius: 12px;
     padding: 10px 15px;
-    align-items: center;
 }
 
 .prism-launcher-icon {
@@ -1072,7 +1155,6 @@
 .prism-launcher-row {
     spacing: 15px;
     margin-bottom: 15px;
-    justify-content: center;
 }
 
 .prism-launcher-card {
@@ -1134,7 +1216,6 @@
 .prism-launcher-filters {
     spacing: 10px;
     margin-bottom: 15px;
-    justify-content: center;
 }
 
 .prism-filter-btn {
@@ -1162,7 +1243,6 @@
 .prism-launcher-navbar {
     spacing: 20px;
     margin-top: 10px;
-    justify-content: center;
 }
 
 .prism-nav-btn {
@@ -1260,7 +1340,11 @@
     background-color: rgba(30, 30, 30, 0.85);
     border-radius: 15px;
     padding: 15px;
+    border: 1px solid rgba(90, 90, 90, 0.5);
     box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.3);
+    -st-bar-background-color: rgba(0, 0, 0, 0.2);
+    -st-handle-border-radius: 6px;
+    -st-handle-background-color: rgba(255, 255, 255, 0.3);
 }
 
 .notification-hover-overlay {
@@ -1275,7 +1359,6 @@
 .prism-home-bar {
     background-color: rgba(216, 216, 216, 0.4);
     border-radius: 10px;
-    transition: background-color 0.2s, width 0.2s;
 }
 
 .prism-home-bar:hover {

@@ -6,7 +6,6 @@
 /*                                                                */
 
 import St from 'gi://St';
-import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
@@ -23,15 +22,6 @@ export class ClipboardManager {
         this.menuBox = null;
         this.isOpen = false;
         this.clickBinder = null;
-
-        this._startWatching();
-    }
-
-    _startWatching() {
-        this._timeoutId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-            this._checkClipboard();
-            return GLib.SOURCE_CONTINUE;
-        });
     }
 
     _checkClipboard() {
@@ -117,6 +107,7 @@ export class ClipboardManager {
         this.menuBox.set_size(menuWidth, menuHeight);
         
         this.isOpen = true;
+        this._checkClipboard();
 
         this.clickBinder = global.stage.connect('captured-event', (stage, event) => {
             let type = event.type();
@@ -203,10 +194,6 @@ export class ClipboardManager {
     }
 
     destroy() {
-        if (this._timeoutId) {
-            GLib.source_remove(this._timeoutId);
-            this._timeoutId = null;
-        }
         this.closeMenu();
     }
 };
