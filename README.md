@@ -15,7 +15,7 @@
   <a href="Documentation/FULL.md">Documentation</a> •
   <a href="../../issues">Issues</a>
 </p>
-<img width="1435" height="896" alt="image" src="https://github.com/user-attachments/assets/99681720-81d6-4bf8-bb4d-ee21b2f7371b" />
+<img width="1436" height="897" alt="image" src="https://github.com/user-attachments/assets/56b6431f-32eb-4462-aaeb-35e77f427eef" />
 </div>
 
 

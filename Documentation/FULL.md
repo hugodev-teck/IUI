@@ -112,7 +112,7 @@ prism@dock.ui/
 ├── notificationsys.js         # NotificationManager
 ├── desktopWidgets.js          # PrismWidgets : moteur de widgets + drag & drop
 ├── time.js                    # TimeMachine : horloge en arrière-plan
-├── clipboard.js               # ClipboardManager : polling + menu historique
+├── clipboard.js               # ClipboardManager : lecture à l'ouverture + historique
 ├── updater.js                 # Application GTK4 autonome de mise à jour/intégrité
 ├── stylesheet.css             # Styles (valeurs absolues uniquement)
 ├── metadata.json              # Déclaration GNOME Shell
@@ -136,7 +136,7 @@ prism@dock.ui/
 |---|---|
 | `St` | Tous les widgets visuels |
 | `Clutter` | Animations, `FixedLayout`, `FlowLayout`, `BinLayout`, événements tactiles |
-| `GLib` | Timers, chemins de fichiers, lecture de `/proc`, spawn synchrone |
+| `GLib` | Timers, chemins de fichiers, spawn système ponctuel |
 | `Gio` | Fichiers, icônes, `AppInfo`, `Settings`, D-Bus, réseau |
 | `GObject` | Déclaration de l'extension (`Extension`) |
 | `Meta` | Fenêtres (`Meta.Window`, maximisation, focus, minimisation) |
@@ -150,10 +150,9 @@ prism@dock.ui/
 | `Gtk 4` | Interface de `updater.js` (processus séparé) |
 
 **Commandes système :**
-- `uname -m` — détection architecture CPU (x86_64/aarch64)
+- `uname -m` — détection architecture CPU, résultat mis en cache
 - `gnome-session-quit` — déconnexion/redémarrage
 - `systemctl suspend/reboot/poweroff`
-- `bluetoothctl` — liste et état des périphériques Bluetooth
 - `gjs -m updater.js` — lancement de l'updater dans un sous-processus isolé
 
 ---
@@ -205,11 +204,11 @@ PrismExtension.enable()
  ├── new PrismWidgets()             → moteur de widgets bureau
  │
  ├── Gio.Settings('org.gnome.desktop.background')
- │    ├── Sauvegarde de l'URI d'origine dans this._originalWallpaperUri
+ │    ├── Sauvegarde de l'URI d'origine et de celle appliquée par PrismUI
  │    └── Application du fond d'écran PrismUI (this.dir → icons/interface/wallpaper/)
  │
  ├── Main.panel.hide()              → masque le panel natif
- ├── new ClipboardManager()         → démarre le polling presse-papier (1s)
+ ├── new ClipboardManager()         → prépare l'historique, sans polling continu
  ├── _registerPrismApps(this)       → crée/met à jour les fichiers .desktop PRISM
  └── new HomeBar()                  → barre de 200×6px (visible si fenêtre maximisée)
 ```
@@ -224,14 +223,14 @@ PrismExtension.disable()
  ├── global.myDock.destroy()                   → retire le dock, déconnecte MPRIS
  ├── global.notificationManager.destroy()      → signaux + acteurs chrome
  ├── global.networkSetting.destroy()           → arrête NM/UPower/Gvc
- ├── global.clipboardManager.destroy()         → arrête le polling 1s
+ ├── global.clipboardManager.destroy()         → ferme le menu et libère ses signaux
  ├── global.appLauncher.destroy()              → ferme le lanceur si ouvert
  ├── this._homeBar.destroy()                   → déconnecte les signaux fenêtres
  ├── global.prismWidgets.destroy()             → arrête tous les timers de widgets
  └── Main.panel.show()                         → restaure le panel natif
 ```
 
-> Le fond d'écran d'origine (`this._originalWallpaperUri`) n'est pas restauré dans `disable()`. C'est un comportement voulu — l'extension remplace le fond définitivement tant qu'elle est active.
+> À l'activation, PrismUI applique le même fond aux réglages GNOME clair (`picture-uri`) et sombre (`picture-uri-dark`, si disponible), afin que le basculement du thème dans le centre de contrôle ne change pas le fond. À la désactivation, chaque valeur d'origine est restaurée seulement si son réglage contient toujours le fond appliqué par PrismUI ; les changements effectués par l'utilisateur entre-temps sont conservés.
 
 ---
 
@@ -348,9 +347,9 @@ Ouvert quand un clic sur une icône trouve plusieurs fenêtres. Construit un `St
 ## 8. Module Barre Système — `NetworkSetting`
 
 **Fichier :** `extension.js` — classe `NetworkSetting`  
-**Rendu :** `Main.layoutManager._backgroundGroup`, 23px depuis le haut, 20px du bord droit
+**Rendu :** `Main.layoutManager._backgroundGroup` ; barre système à 11px du haut et 15px du bord droit, date à 15px du bord gauche
 
-Barre horizontale de 3 boutons icônes (Wi-Fi, volume, batterie). Les sous-systèmes matériels sont initialisés **500ms après la construction** pour ne pas bloquer le démarrage.
+La barre système affiche 3 boutons icônes (Wi-Fi, volume, batterie). En face, une bulle de même style affiche l'heure locale puis la date complète en français. Elle s'actualise sur le signal `notify::clock` de `GnomeDesktop.WallClock`, sans timer ni polling. Son infobulle indique « Horloge (Heure local) ». Les sous-systèmes matériels sont initialisés **500ms après la construction** pour ne pas bloquer le démarrage.
 
 ### Wi-Fi (`_initNetwork` → `NM.Client`)
 
@@ -362,13 +361,15 @@ Barre horizontale de 3 boutons icônes (Wi-Fi, volume, batterie). Les sous-syst�
 
 Le menu principal contient un **slider de volume** (classe `Slider.Slider`, contrôlé via `stream.volume` / `stream.push_volume()`) et un **slider de luminosité** connecté à `org.gnome.SettingsDaemon.Power.Screen` via D-Bus.
 
+Le panneau rapide reste dans un cadre unique (`menunet`) et suit la maquette compacte : actions de session en haut, tuiles Wi-Fi/Bluetooth, cinq raccourcis système, curseurs son/luminosité, boutons Accessibilité/Projecter et état de batterie en bas. Les couleurs du panneau et les icônes existantes (Wi-Fi, Bluetooth, accessibilité, alimentation) sont conservées. Les sous-pages utilisent un en-tête aligné avec bouton retour, icône puis titre, et remplacent le contenu à l'intérieur du cadre. Wi-Fi affiche la connexion actuelle et permet de la déconnecter ; si aucun Wi-Fi n’est utilisé, un message l’indique, notamment lorsque le point d’accès actif monopolise l’interface radio. Bluetooth liste les appareils appairés et permet de connecter ceux qui ne le sont pas déjà, au moyen du magasin d’appareils et de l’API `connect_service()` de `GnomeBluetooth.Client` utilisées par GNOME Shell ; la liste suit les changements d’appairage et de connexion. Accessibilité garde ses réglages avec l’en-tête harmonisé. La page du point d’accès affiche la bande/canal si NetworkManager les fournit, permet de modifier le SSID et le mot de passe (le point d’accès actif est redémarré pour appliquer les changements), et ouvre le QR dans une sous-page dédiée. Si `qrencode` manque, le bouton d’installation reste disponible dans cette sous-page et demande l’autorisation administrateur via `pkexec apt-get install -y qrencode`. Bluetooth utilise le client `GnomeBluetooth` pour détecter et observer l’adaptateur, puis le service RFKill de GNOME (`BluetoothAirplaneMode`) pour basculer l’état radio comme dans GNOME Shell. Le raccourci Mode avion pilote le gestionnaire RFKill de GNOME Shell et reflète son état système ; les raccourcis Thème sombre, Économie d’énergie, Point d’accès et Éclairage nocturne pilotent leurs réglages système correspondants. L’état actif est indiqué par la couleur de toute la tuile.
+
 ### Batterie (`_initPower` → `UPowerGlib.Client`)
 
 `UPowerGlib.Client.new_full(null)`. Écoute `notify::display-device`. Polling de secours toutes les 2 secondes. 5 niveaux (< 10%, < 35%, < 60%, < 85%, plein) + suffixe `-ch` si en charge.
 
-### Bluetooth (`_blemenu` → `Gio.Subprocess`)
+### Bluetooth (panneau rapide → `GnomeBluetooth.Client`)
 
-Dialogue direct avec `bluetoothctl` (sans API D-Bus). Vérifie d'abord `systemctl is-active bluetooth`. Parse la sortie en texte brut pour lister les appareils couplés.
+Le panneau rapide lit les appareils appairés ou approuvés avec `Client.get_devices()`, écoute leurs changements d’état, puis connecte les appareils avec `Client.connect_service()`, comme le menu Bluetooth de GNOME Shell.
 
 ---
 
@@ -414,7 +415,7 @@ Overlay 900×760px centré dans `Main.uiGroup`. Fond transparent pour capturer l
 **Fichier :** `clipboard.js`  
 **Rendu :** Chrome GNOME (menu 300×400px, centré à 70% de la hauteur)
 
-**Polling** via `GLib.timeout_add_seconds(1)`. Ignore textes vides, identiques au précédent ou uniquement composés d'espaces. Historique de 15 entrées maximum, dédupliqué avant insertion.
+À l'ouverture du menu, le presse-papier est lu une fois de manière asynchrone. Il n'y a pas de polling continu lorsque le menu est fermé. Les textes vides, identiques au précédent ou uniquement composés d'espaces sont ignorés. L'historique contient au maximum 15 entrées et déduplique avant insertion.
 
 **Détection de clic extérieur** : utilise `captured-event` sur `global.stage` avec détection par coordonnées transformées (`get_transformed_position` + `get_transformed_size`) — plus robuste que `contains()` car fonctionne même si l'acteur cible est dans une autre couche de rendu. Gère aussi les événements tactiles (`Clutter.EventType.TOUCH_BEGIN`).
 
@@ -461,14 +462,14 @@ Construit l'UI via `_buildUIFromSchema` (récursif). Maintient un dictionnaire `
 
 Pour chaque binding, installe un `GLib.timeout_add_seconds(interval)` qui exécute `updateData()` :
 
-- **`js`** : exécute `new Function(bind.process)()` directement dans le thread GJS
-- **`file`** : lit le fichier via `GLib.file_get_contents()`, passe les données à `new Function('data', bind.process)(rawData)`
+- **`js`** : exécute un processeur compilé une fois à la création du widget
+- **`file`** : lit le fichier de manière asynchrone avec `Gio.File.load_contents_async()`, puis applique le processeur compilé
 - **`cmd`** : `Gio.Subprocess` avec `STDOUT_PIPE`, `communicate_utf8_async` — résultat appliqué de manière asynchrone. En cas d'erreur, affiche `"Erreur ⚠️"`
 - **`http`** : `this._httpSession.send_and_read_async()` (session Soup 3 partagée, user-agent `curl/7.81.0`). En cas d'erreur HTTP ou réseau, affiche le code d'erreur dans le widget
 
 Le premier appel à `updateData()` est effectué **immédiatement** à la création du widget (avant le premier tick du timer). Tous les timer IDs sont stockés dans `box._timerIds` et annulés via `box.connect('destroy', ...)`.
 
-**Widget CPU (calcul différentiel) :** utilise `globalThis.prevCpuTotal` / `globalThis.prevCpuIdle` pour stocker les valeurs du tick précédent entre les appels. Le premier appel retourne `'CPU : Calcul...'` et initialise les valeurs de référence.
+**Widget CPU (calcul différentiel) :** stocke les valeurs du tick précédent dans l'état privé de chaque binding, sans polluer `globalThis`. Le premier appel retourne `'CPU : Calcul...'` et initialise les valeurs de référence.
 
 **Widget raccourci (`shortcut`) :** logique spéciale. `setupShortcutBinding()` configure l'icône et le label de l'app. Un clic court sur le widget lance l'app (`Gio.DesktopAppInfo.launch()`). Si aucune app n'est encore choisie, ouvre `_openShortcutAppPicker`.
 

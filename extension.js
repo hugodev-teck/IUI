@@ -17,6 +17,8 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
+import GnomeDesktop from 'gi://GnomeDesktop';
+import GnomeBluetooth from 'gi://GnomeBluetooth?version=3.0';
 import NM from 'gi://NM';
 import UPowerGlib from 'gi://UPowerGlib';
 import Meta from 'gi://Meta';
@@ -30,12 +32,15 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import * as Slider from 'resource:///org/gnome/shell/ui/slider.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
+import * as Rfkill from 'resource:///org/gnome/shell/ui/status/rfkill.js';
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
 
-import { NotificationManager } from './notificationsys.js';
+import { NotificationManager, getTopBarTooltipY } from './notificationsys.js';
 import { AppLauncher } from './intelligentsearchbar.js';
 import { PrismWidgets } from './desktopWidgets.js';
 import { ClipboardManager } from './clipboard.js';
+
+Gio._promisify(GnomeBluetooth.Client.prototype, 'connect_service');
 
 const Mainloop = {
     idle_add: callback => GLib.idle_add(GLib.PRIORITY_DEFAULT, callback),
@@ -71,8 +76,25 @@ const PRISM_APPS = {
     }
 };
 
-let searchBar, pollingId, homeBar, previousWindow, notificationManager, originalWallpaperUri, myDock, menu, networkSetting, menunet, Volmenu, Accesmenu, superBlock, closeOverviewTimeout, monitor;
+let searchBar, pollingId, homeBar, previousWindow, notificationManager, originalWallpaperUri, myDock, menu, networkSetting, menunet, Volmenu, superBlock, closeOverviewTimeout, monitor;
 let _isPC = false;
+let _systemArchitecture = null;
+
+function getSystemArchitecture() {
+    if (_systemArchitecture) return _systemArchitecture;
+
+    let [success, stdout, stderr, status] = GLib.spawn_command_line_sync('uname -m');
+    if (!success) {
+        let errorText = stderr ? new TextDecoder().decode(stderr).trim() : `code ${status}`;
+        throw new Error(`Impossible de déterminer l’architecture système : ${errorText}`);
+    }
+
+    _systemArchitecture = new TextDecoder().decode(stdout).trim();
+    if (!_systemArchitecture) {
+        throw new Error('La commande uname -m a renvoyé une architecture vide.');
+    }
+    return _systemArchitecture;
+}
 
 class MyDock {
     constructor(ext) {
@@ -90,8 +112,7 @@ class MyDock {
 
         this.addCustomIconMenu(`${this._ext.path}/icons/logo.png`, "Menu principal");
         let programDir = GLib.build_filenamev([this._ext.path, 'System', 'Program']);
-        let [res, out] = GLib.spawn_command_line_sync('uname -m');
-        let arch = new TextDecoder().decode(out).trim();
+        let arch = getSystemArchitecture();
         let dtConfig = PRISM_APPS['desktools'];
         
         if (dtConfig) {
@@ -806,7 +827,7 @@ class MyDock {
         if (!apps.includes(desktopFile)) {
             apps.push(desktopFile);
             this.settings.set_strv('dock-apps', apps);
-            this.addAppIcon(desktop, true);
+            this.addAppIcon(desktopFile, true);
         }
     }
 
@@ -980,8 +1001,9 @@ class MyDock {
             }
 
             icon._hoverTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                this._showWindowList(appInfo, icon);
                 icon._hoverTimer = null;
+                if (!icon._prismDestroyed)
+                    this._showWindowList(appInfo, icon);
                 return GLib.SOURCE_REMOVE;
             });
         });
@@ -1152,7 +1174,7 @@ class MyDock {
 
             if (matchedApp) {
                 let desktopId = matchedApp.get_id();
-                this.addAppIcon(desktop, false);
+                this.addAppIcon(desktopId, false);
                 
                 let newChildren = this.container.get_children();
                 for (let child of newChildren) {
@@ -1520,10 +1542,6 @@ class MyDock {
     }
 
     addCustomIcon(iconPath, labelText = '', appId = null) {
-        const GLib = imports.gi.GLib;
-        const Gio = imports.gi.Gio;
-        const St = imports.gi.St;
-
         let icon = new St.Button({ style_class: 'app-icon' });
 
         let fileIcon = new Gio.FileIcon({ file: Gio.File.new_for_path(iconPath) });
@@ -1600,8 +1618,7 @@ class MyDock {
         let extDir = this._ext.path;
         let programDir = GLib.build_filenamev([extDir, 'System', 'Program']);
         
-        let [res, out] = GLib.spawn_command_line_sync('uname -m');
-        let arch = new TextDecoder().decode(out).trim();
+        let arch = getSystemArchitecture();
 
         for (let id in PRISM_APPS) {
             let app = PRISM_APPS[id];
@@ -1717,8 +1734,7 @@ class MyDock {
 
     _confirmDownload(appId) {
         let appConfig = PRISM_APPS[appId];
-        let [res, out] = GLib.spawn_command_line_sync('uname -m');
-        let arch = new TextDecoder().decode(out).trim();
+        let arch = getSystemArchitecture();
         let fileName = appConfig.getFileName(arch, appConfig.version);
         let downloadUrl = `https://github.com/${appConfig.repo}/releases/download/${appConfig.tag}/${fileName}`;
 
@@ -1890,6 +1906,23 @@ class NetworkSetting {
     constructor(ext) {
         this._ext = ext;
         this._signalConnections = [];
+        this._bluetoothInitialized = false;
+        this._bluetoothClient = null;
+        this._bluetoothRfkillProxy = null;
+        this._bluetoothRfkillInitialized = false;
+        this._wifiToggleCircle = null;
+        this._bluetoothToggleCircle = null;
+        this._quickShortcutButtons = {};
+        this._hotspotSsid = null;
+        this._hotspotPassword = null;
+        this._hotspotOperationPending = false;
+        this._interfaceSettings = null;
+        this._nightLightSettings = null;
+        this._powerProfilesProxy = null;
+        this._powerProfilesInitialized = false;
+        this._brightnessProxy = null;
+        this._brightnessInitPending = false;
+        this._rfkillManager = null;
         this._initTimeout = 0;
         this._iconsPath = `${this._ext.path}/icons/interface/wthicon`;
 
@@ -1898,6 +1931,21 @@ class NetworkSetting {
             name: 'network-settings-container',
             vertical: false
         });
+
+        this.clockContainer = new St.BoxLayout({
+            style_class: 'clock-date-container',
+            name: 'clock-date-container',
+            vertical: false,
+            reactive: true,
+            track_hover: true
+        });
+        this.clockLabel = new St.Label({
+            style_class: 'clock-date-label',
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        this.clockContainer.add_child(this.clockLabel);
+        this.clockContainer.connect('enter-event', () => this._showStatusTooltip(this.clockContainer, 'clock'));
+        this.clockContainer.connect('leave-event', () => this._hideStatusTooltip());
 
         let wifiObj = this.createDynamicButton('wifiwth0barre.png', 'wifi');
         this.wifiButton = wifiObj.button;
@@ -1916,18 +1964,25 @@ class NetworkSetting {
         this.container.add_child(this.batteryButton);
 
         Main.layoutManager._backgroundGroup.add_child(this.container);
+        Main.layoutManager._backgroundGroup.add_child(this.clockContainer);
+
+        this._wallClock = new GnomeDesktop.WallClock();
+        this._wallClockSignalId = this._wallClock.connect('notify::clock', () => this._updateClock());
+        this._updateClock();
         
         this._netPosIdleId = 0;
         let queueNetPositionUpdate = () => {
             if (this._netPosIdleId) return;
             this._netPosIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
                 this._netPosIdleId = 0;
-                if (this.container) this._setPosition();
+                if (this.container || this.clockContainer) this._setPosition();
                 return GLib.SOURCE_REMOVE;
             });
         };
         this.container.connect('notify::width', queueNetPositionUpdate);
         this.container.connect('notify::height', queueNetPositionUpdate);
+        this.clockContainer.connect('notify::width', queueNetPositionUpdate);
+        this.clockContainer.connect('notify::height', queueNetPositionUpdate);
 
         Mainloop.idle_add(() => {
             if (this.container) this._setPosition();
@@ -1942,6 +1997,7 @@ class NetworkSetting {
             this._initAudio();
             this._initPower();
             this._initNetwork();
+            this._initBrightness();
             return GLib.SOURCE_REMOVE;
         });
 
@@ -1960,6 +2016,8 @@ class NetworkSetting {
     }
 
     _getStatusTooltipText(type) {
+        if (type === 'clock') return 'Horloge (Heure local)';
+
         if (type === 'sound') {
             let stream = this._mixerControl ? this._mixerControl.get_default_sink() : null;
             if (!stream) return 'Son indisponible';
@@ -1985,7 +2043,10 @@ class NetworkSetting {
                 device.device_type === NM.DeviceType.WIFI && device.active_connection === primary
             );
             let accessPoint = wifiDevice ? wifiDevice.active_access_point : null;
-            if (accessPoint) return `Wi-Fi : ${accessPoint.get_ssid().to_string()} (${accessPoint.strength}%)`;
+            if (accessPoint) {
+                let ssid = NM.utils_ssid_to_utf8(accessPoint.get_ssid().get_data());
+                return `Wi-Fi : ${ssid || 'Réseau inconnu'} (${accessPoint.strength}%)`;
+            }
             return 'Wi-Fi connecte';
         }
         if (connectionType.includes('ethernet')) return 'Ethernet connecte';
@@ -1993,7 +2054,7 @@ class NetworkSetting {
     }
 
     _showStatusTooltip(button, type) {
-        if (this._mainMenuOpen || this._tooltipsLocked || menunet || Accesmenu) return;
+        if (this._mainMenuOpen || this._tooltipsLocked || menunet) return;
 
         if (!this.statusTooltip) {
             this.statusTooltip = new St.Label({
@@ -2005,19 +2066,19 @@ class NetworkSetting {
 
         this.statusTooltip.set_text(this._getStatusTooltipText(type));
         this.statusTooltip.show();
-        let [x, y] = button.get_transformed_position();
-        let [width, height] = button.get_transformed_size();
+        let [x] = button.get_transformed_position();
+        let [width] = button.get_transformed_size();
         let monitor = Main.layoutManager.primaryMonitor;
         let tooltipWidth = this.statusTooltip.width;
         let tooltipHeight = this.statusTooltip.height;
         let tooltipX = x + (width - tooltipWidth) / 2;
-        let tooltipY = y + height + 13;
+        let tooltipY = getTopBarTooltipY(monitor);
         let minX = monitor.x + 8;
         let maxX = monitor.x + monitor.width - tooltipWidth - 8;
         let maxY = monitor.y + monitor.height - tooltipHeight - 8;
 
         tooltipX = Math.max(minX, Math.min(maxX, tooltipX));
-        if (tooltipY > maxY) tooltipY = y - tooltipHeight - 8;
+        if (tooltipY > maxY) tooltipY = monitor.y + 11 - tooltipHeight - 8;
         tooltipY = Math.max(monitor.y + 8, Math.min(maxY, tooltipY));
         this.statusTooltip.set_position(tooltipX, tooltipY);
     }
@@ -2048,7 +2109,7 @@ class NetworkSetting {
         let icon = new St.Icon({
             gicon: gicon,
             style_class: 'feature-icon-net',
-            icon_size: 26
+            icon_size: 25
         });
 
         button.set_child(icon);
@@ -2070,8 +2131,104 @@ class NetworkSetting {
     }
     
     _closeAllMenus() {
-        if (menunet) { menunet.destroy(); menunet = null; }
-        if (Accesmenu) { Accesmenu.destroy(); Accesmenu = null; }
+        if (menunet) menunet.destroy();
+    }
+
+    _initBrightness() {
+        if (_isPC || this._brightnessProxy || this._brightnessInitPending)
+            return;
+
+        this._brightnessInitPending = true;
+        Gio.DBusProxy.new_for_bus(
+            Gio.BusType.SESSION,
+            Gio.DBusProxyFlags.NONE,
+            null,
+            'org.gnome.SettingsDaemon.Power',
+            '/org/gnome/SettingsDaemon/Power',
+            'org.gnome.SettingsDaemon.Power.Screen',
+            null,
+            (source, result) => {
+                this._brightnessInitPending = false;
+                try {
+                    let proxy = Gio.DBusProxy.new_for_bus_finish(result);
+                    if (!this.container) {
+                        return;
+                    }
+                    this._brightnessProxy = proxy;
+                    if (!this._brightnessProxy.get_name_owner()) {
+                        log('[PrismUI] Le service de luminosité GNOME est indisponible.');
+                        this._brightnessProxy = null;
+                        if (menunet && menunet._brightnessSlider) {
+                            this._notifyQuickSettingUnavailable(
+                                'Luminosité indisponible',
+                                'Le service GNOME de réglage de l’écran ne répond pas.'
+                            );
+                        }
+                        return;
+                    }
+
+                    if (menunet && menunet._brightnessSlider)
+                        this._connectBrightnessSlider(menunet, menunet._brightnessSlider);
+                } catch (e) {
+                    log(`[PrismUI] Erreur init luminosité : ${e.message}`);
+                    if (menunet && menunet._brightnessSlider)
+                        this._notifyQuickSettingUnavailable('Luminosité indisponible', e.message);
+                }
+            }
+        );
+    }
+
+    _connectBrightnessSlider(menuActor, brightSlider) {
+        let proxy = this._brightnessProxy;
+        if (!proxy || !proxy.get_name_owner() || menuActor._brightnessSliderSignalId)
+            return;
+
+        let updatingFromSignal = false;
+        let currentBrightness = proxy.get_cached_property('Brightness');
+        if (currentBrightness) {
+            brightSlider.value = Math.max(0, Math.min(100, currentBrightness.get_int32())) / 100;
+        } else {
+            log('[PrismUI] Le service de luminosité n’a pas fourni la valeur actuelle.');
+            this._notifyQuickSettingUnavailable('Luminosité indisponible', 'Impossible de lire la luminosité actuelle.');
+        }
+
+        brightSlider.connect('notify::value', () => {
+            if (updatingFromSignal || !this._brightnessProxy)
+                return;
+            let value = Math.round(brightSlider.value * 100);
+            this._brightnessProxy.get_connection().call(
+                'org.gnome.SettingsDaemon.Power',
+                '/org/gnome/SettingsDaemon/Power',
+                'org.freedesktop.DBus.Properties',
+                'Set',
+                new GLib.Variant('(ssv)', [
+                    'org.gnome.SettingsDaemon.Power.Screen',
+                    'Brightness',
+                    new GLib.Variant('i', value)
+                ]),
+                null,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null,
+                (connection, result) => {
+                    try {
+                        connection.call_finish(result);
+                    } catch (e) {
+                        log(`[PrismUI] Erreur modification luminosité : ${e.message}`);
+                        this._notifyQuickSettingUnavailable('Luminosité non modifiée', e.message);
+                    }
+                }
+            );
+        });
+
+        menuActor._brightnessSliderSignalId = proxy.connect('g-properties-changed', (source, changed) => {
+            let value = changed.lookup_value('Brightness', null);
+            if (!value)
+                return;
+            updatingFromSignal = true;
+            brightSlider.value = Math.max(0, Math.min(100, value.get_int32())) / 100;
+            updatingFromSignal = false;
+        });
     }
 
     _initAudio() {
@@ -2172,8 +2329,970 @@ class NetworkSetting {
             this._nmClient = NM.Client.new(null);
             this._connectSignal(this._nmClient, 'notify::primary-connection', () => this._updateNetworkIcon());
             this._connectSignal(this._nmClient, 'notify::connectivity', () => this._updateNetworkIcon());
+            this._connectSignal(this._nmClient, 'notify::wireless-enabled', () => {
+                this._updateNetworkIcon();
+                this._updateQuickToggleStates();
+                this._updateQuickShortcutStates();
+            });
+            this._connectSignal(this._nmClient, 'notify::wireless-hardware-enabled', () => {
+                this._updateNetworkIcon();
+                this._updateQuickToggleStates();
+                this._updateQuickShortcutStates();
+            });
+            this._connectSignal(this._nmClient, 'notify::active-connections', () => this._updateQuickShortcutStates());
             this._updateNetworkIcon();
+            this._updateQuickToggleStates();
         } catch (e) { log(`[PrismUI] Erreur Network: ${e.message}`); }
+    }
+
+    _initBluetooth() {
+        if (this._bluetoothInitialized) return;
+        this._bluetoothInitialized = true;
+        try {
+            this._bluetoothClient = new GnomeBluetooth.Client();
+            for (let property of [
+                'notify::default-adapter',
+                'notify::default-adapter-powered',
+                'notify::default-adapter-state'
+            ]) {
+                this._connectSignal(this._bluetoothClient, property, () => {
+                    this._updateQuickToggleStates();
+                });
+            }
+            this._updateQuickToggleStates();
+            this._initBluetoothRfkill();
+        } catch (e) {
+            log(`[PrismUI] Impossible d'initialiser le client Bluetooth GNOME : ${e.message}`);
+            this._bluetoothClient = null;
+            this._bluetoothInitialized = false;
+        }
+    }
+
+    _initBluetoothRfkill() {
+        if (this._bluetoothRfkillInitialized) return;
+        this._bluetoothRfkillInitialized = true;
+        Gio.DBusProxy.new_for_bus(
+            Gio.BusType.SESSION,
+            Gio.DBusProxyFlags.DO_NOT_AUTO_START,
+            null,
+            'org.gnome.SettingsDaemon.Rfkill',
+            '/org/gnome/SettingsDaemon/Rfkill',
+            'org.gnome.SettingsDaemon.Rfkill',
+            null,
+            (source, result) => {
+                try {
+                    this._bluetoothRfkillProxy = Gio.DBusProxy.new_for_bus_finish(result);
+                    this._connectSignal(this._bluetoothRfkillProxy, 'g-properties-changed', () => {
+                        this._updateQuickToggleStates();
+                    });
+                } catch (e) {
+                    this._bluetoothRfkillInitialized = false;
+                    log(`[PrismUI] Impossible de se connecter au service RFKill de GNOME : ${e.message}`);
+                }
+            }
+        );
+    }
+
+    _initQuickShortcutSettings() {
+        if (!this._rfkillManager) {
+            this._rfkillManager = Rfkill.getRfkillManager();
+            this._connectSignal(this._rfkillManager, 'notify::airplane-mode', () => {
+                this._updateQuickShortcutStates();
+                this._updateQuickToggleStates();
+                this._updateNetworkIcon();
+            });
+            this._connectSignal(this._rfkillManager, 'notify::show-airplane-mode', () => {
+                this._updateQuickShortcutStates();
+            });
+        }
+
+        let schemaSource = Gio.SettingsSchemaSource.get_default();
+        if (!schemaSource) {
+            log('[PrismUI] Impossible de charger les réglages des tuiles rapides : schémas GSettings indisponibles.');
+            return;
+        }
+
+        let interfaceSchema = schemaSource.lookup('org.gnome.desktop.interface', true);
+        if (!this._interfaceSettings && interfaceSchema && interfaceSchema.has_key('color-scheme')) {
+            this._interfaceSettings = new Gio.Settings({ settings_schema: interfaceSchema });
+            this._connectSignal(this._interfaceSettings, 'changed::color-scheme', () => this._updateQuickShortcutStates());
+        } else if (!interfaceSchema || !interfaceSchema.has_key('color-scheme')) {
+            log('[PrismUI] Le réglage GNOME « color-scheme » est indisponible.');
+        }
+
+        let nightLightSchema = schemaSource.lookup('org.gnome.settings-daemon.plugins.color', true);
+        if (!this._nightLightSettings && nightLightSchema && nightLightSchema.has_key('night-light-enabled')) {
+            this._nightLightSettings = new Gio.Settings({ settings_schema: nightLightSchema });
+            this._connectSignal(this._nightLightSettings, 'changed::night-light-enabled', () => this._updateQuickShortcutStates());
+        } else if (!nightLightSchema || !nightLightSchema.has_key('night-light-enabled')) {
+            log('[PrismUI] Le réglage GNOME de l’éclairage nocturne est indisponible.');
+        }
+
+        this._initPowerProfiles();
+        this._updateQuickShortcutStates();
+    }
+
+    _initPowerProfiles() {
+        if (this._powerProfilesInitialized) return;
+        this._powerProfilesInitialized = true;
+        Gio.DBusProxy.new_for_bus(
+            Gio.BusType.SYSTEM,
+            Gio.DBusProxyFlags.NONE,
+            null,
+            'org.freedesktop.UPower.PowerProfiles',
+            '/org/freedesktop/UPower/PowerProfiles',
+            'org.freedesktop.UPower.PowerProfiles',
+            null,
+            (source, result) => {
+                try {
+                    this._powerProfilesProxy = Gio.DBusProxy.new_for_bus_finish(result);
+                    this._connectSignal(this._powerProfilesProxy, 'g-properties-changed', () => this._updateQuickShortcutStates());
+                    this._connectSignal(this._powerProfilesProxy, 'notify::g-name-owner', () => {
+                        this._updateQuickShortcutStates();
+                    });
+                    if (!this._powerProfilesProxy.get_name_owner()) {
+                        log('[PrismUI] Aucun service power-profiles-daemon ne possède le nom D-Bus attendu.');
+                        this._powerProfilesInitialized = false;
+                    }
+                    this._updateQuickShortcutStates();
+                } catch (e) {
+                    log(`[PrismUI] Profils d’énergie indisponibles : ${e.message}`);
+                    this._powerProfilesInitialized = false;
+                }
+            }
+        );
+    }
+
+    _notifyQuickSettingUnavailable(title, message) {
+        if (global.notificationManager) {
+            global.notificationManager.showNotification(title, message, 'Système', 'preferences-system-symbolic');
+        }
+    }
+
+    _isHotspotActive() {
+        if (!this._nmClient) return false;
+        try {
+            return this._nmClient.get_active_connections().some(activeConnection => {
+                let connection = activeConnection.get_connection();
+                let wireless = connection ? connection.get_setting_wireless() : null;
+                return wireless && wireless.mode === 'ap';
+            });
+        } catch (e) {
+            log(`[PrismUI] Impossible de lire l’état du point d’accès : ${e.message}`);
+            return false;
+        }
+    }
+
+    _updateQuickShortcutStates() {
+        let states = {
+            airplane: !!(this._rfkillManager && this._rfkillManager.airplane_mode),
+            darkTheme: !!(
+                this._interfaceSettings &&
+                this._interfaceSettings.get_string('color-scheme') === 'prefer-dark'
+            ),
+            powerSaver: !!(
+                this._powerProfilesProxy &&
+                this._powerProfilesProxy.get_cached_property('ActiveProfile') &&
+                this._powerProfilesProxy.get_cached_property('ActiveProfile').get_string() === 'power-saver'
+            ),
+            hotspot: this._isHotspotActive(),
+            nightLight: !!(
+                this._nightLightSettings &&
+                this._nightLightSettings.get_boolean('night-light-enabled')
+            )
+        };
+
+        for (let [name, button] of Object.entries(this._quickShortcutButtons)) {
+            if (states[name]) {
+                button.add_style_class_name('active');
+            } else {
+                button.remove_style_class_name('active');
+            }
+        }
+    }
+
+    _setAirplaneMode(enabled) {
+        if (!this._rfkillManager || !this._rfkillManager.show_airplane_mode) {
+            log('[PrismUI] Impossible de modifier le mode avion système : GNOME ne le propose pas sur cet appareil.');
+            this._notifyQuickSettingUnavailable(
+                'Mode avion indisponible',
+                'Le mode avion système n’est pas disponible sur cet appareil.'
+            );
+            return;
+        }
+
+        try {
+            this._rfkillManager.airplane_mode = enabled;
+        } catch (e) {
+            log(`[PrismUI] Impossible de modifier le mode avion système : ${e.message}`);
+            this._notifyQuickSettingUnavailable('Mode avion non modifié', e.message);
+        }
+    }
+
+    _togglePowerSaver() {
+        let activeProfile = this._powerProfilesProxy
+            ? this._powerProfilesProxy.get_cached_property('ActiveProfile')
+            : null;
+        if (!this._powerProfilesProxy || !this._powerProfilesProxy.get_name_owner() || !activeProfile) {
+            log('[PrismUI] Impossible de changer le profil : service des profils d’énergie indisponible.');
+            this._powerProfilesProxy = null;
+            this._powerProfilesInitialized = false;
+            this._initPowerProfiles();
+            this._notifyQuickSettingUnavailable(
+                'Économie d’énergie indisponible',
+                'Le service des profils d’énergie n’est pas prêt ou ne répond pas.'
+            );
+            return;
+        }
+
+        let profile = activeProfile.get_string() === 'power-saver' ? 'balanced' : 'power-saver';
+        this._powerProfilesProxy.get_connection().call(
+            'org.freedesktop.UPower.PowerProfiles',
+            '/org/freedesktop/UPower/PowerProfiles',
+            'org.freedesktop.DBus.Properties',
+            'Set',
+            new GLib.Variant('(ssv)', [
+                'org.freedesktop.UPower.PowerProfiles',
+                'ActiveProfile',
+                new GLib.Variant('s', profile)
+            ]),
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            null,
+            (connection, result) => {
+                try {
+                    connection.call_finish(result);
+                    this._updateQuickShortcutStates();
+                } catch (e) {
+                    log(`[PrismUI] Impossible de changer le profil d’énergie : ${e.message}`);
+                    this._notifyQuickSettingUnavailable('Profil d’énergie non modifié', e.message);
+                }
+            }
+        );
+    }
+
+    _getActiveHotspot() {
+        if (!this._nmClient) return null;
+        return this._nmClient.get_active_connections().find(activeConnection => {
+            let connection = activeConnection.get_connection();
+            let wireless = connection ? connection.get_setting_wireless() : null;
+            return wireless && wireless.mode === 'ap';
+        }) ?? null;
+    }
+
+    _ensureHotspotCredentials() {
+        if (this._hotspotSsid && this._hotspotPassword) return;
+        let hostname = GLib.get_host_name().replace(/[^a-zA-Z0-9-]/g, '').slice(0, 18) || 'Prism';
+        this._hotspotSsid = `Prism-${hostname}`.slice(0, 32);
+        this._hotspotPassword = GLib.uuid_string_random().replace(/-/g, '').slice(0, 16);
+    }
+
+    _runNmcli(args, callback) {
+        try {
+            let process = Gio.Subprocess.new(
+                ['nmcli', ...args],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+            );
+            process.communicate_utf8_async(null, null, (subprocess, result) => {
+                try {
+                    let [communicated, stdout, stderr] = subprocess.communicate_utf8_finish(result);
+                    if (!communicated || !subprocess.get_successful()) {
+                        callback(null, (stderr || stdout || 'NetworkManager n’a pas pu terminer l’opération.').trim());
+                        return;
+                    }
+                    callback(stdout.trim(), null);
+                } catch (e) {
+                    callback(null, e.message);
+                }
+            });
+        } catch (e) {
+            callback(null, e.message);
+        }
+    }
+
+    _getSavedHotspotConnection() {
+        if (!this._nmClient) return null;
+        return this._nmClient.get_connections().find(connection => {
+            let wireless = connection.get_setting_wireless();
+            return wireless &&
+                wireless.mode === 'ap' &&
+                connection.get_id() === 'PrismUI Hotspot';
+        }) ?? null;
+    }
+
+    _toggleHotspot() {
+        if (!this._nmClient) {
+            log('[PrismUI] Impossible de gérer le point d’accès : NetworkManager est indisponible.');
+            this._notifyQuickSettingUnavailable('Point d’accès indisponible', 'NetworkManager ne répond pas.');
+            return;
+        }
+        if (this._hotspotOperationPending) return;
+
+        let activeHotspot = this._getActiveHotspot();
+
+        if (activeHotspot) {
+            this._hotspotOperationPending = true;
+            this._nmClient.deactivate_connection_async(activeHotspot, null, (client, result) => {
+                this._hotspotOperationPending = false;
+                try {
+                    client.deactivate_connection_finish(result);
+                    this._updateQuickShortcutStates();
+                } catch (e) {
+                    log(`[PrismUI] Impossible de désactiver le point d’accès : ${e.message}`);
+                    this._notifyQuickSettingUnavailable('Point d’accès non désactivé', e.message);
+                }
+            });
+            return;
+        }
+
+        if (!this._nmClient.wireless_hardware_enabled) {
+            this._notifyQuickSettingUnavailable('Point d’accès indisponible', 'Le Wi-Fi est désactivé par un commutateur matériel.');
+            return;
+        }
+        if (this._rfkillManager && this._rfkillManager.airplane_mode) {
+            this._notifyQuickSettingUnavailable('Mode avion actif', 'Désactive le mode avion avant d’activer le point d’accès.');
+            return;
+        }
+
+        let wifiDevice = this._nmClient.get_devices().find(device =>
+            device.device_type === NM.DeviceType.WIFI && device.get_managed()
+        );
+        if (!wifiDevice) {
+            this._notifyQuickSettingUnavailable('Point d’accès indisponible', 'Aucune interface Wi-Fi gérée par NetworkManager n’a été trouvée.');
+            return;
+        }
+
+        this._ensureHotspotCredentials();
+        this._hotspotOperationPending = true;
+        let savedConnection = this._getSavedHotspotConnection();
+        if (savedConnection) {
+            let activateSavedHotspot = () => {
+                this._nmClient.activate_connection_async(savedConnection, wifiDevice, null, null, (client, result) => {
+                    this._hotspotOperationPending = false;
+                    try {
+                        client.activate_connection_finish(result);
+                        this._updateQuickShortcutStates();
+                    } catch (e) {
+                        log(`[PrismUI] Impossible de réactiver le profil de point d’accès : ${e.message}`);
+                        this._notifyQuickSettingUnavailable('Point d’accès non activé', e.message);
+                    }
+                });
+            };
+            let uuid = savedConnection.get_uuid();
+            this._runNmcli([
+                '--show-secrets',
+                '-g',
+                '802-11-wireless.ssid,802-11-wireless-security.psk',
+                'connection', 'show', 'uuid', uuid
+            ], (output, error) => {
+                if (!error) {
+                    let [ssid, password] = output.split(/\r?\n/);
+                    this._hotspotSsid = ssid || this._hotspotSsid;
+                    this._hotspotPassword = password || this._hotspotPassword;
+                } else {
+                    log(`[PrismUI] Impossible de lire le profil de point d’accès enregistré : ${error}`);
+                }
+                activateSavedHotspot();
+            });
+            return;
+        }
+
+        this._runNmcli([
+            'device', 'wifi', 'hotspot',
+            'ifname', wifiDevice.get_iface(),
+            'con-name', 'PrismUI Hotspot',
+            'ssid', this._hotspotSsid,
+            'password', this._hotspotPassword
+        ], (stdout, error) => {
+            this._hotspotOperationPending = false;
+            if (error) {
+                log(`[PrismUI] Impossible d’activer le point d’accès : ${error}`);
+                this._notifyQuickSettingUnavailable('Point d’accès non activé', error);
+                return;
+            }
+            this._updateQuickShortcutStates();
+        });
+    }
+
+    _showHotspotDetails() {
+        this._ensureHotspotCredentials();
+        this._showQuickSettingsPage('Point d’accès', 'network-wireless-hotspot-symbolic', () => {
+            let details = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-settings-details quick-hotspot-details',
+                x_expand: true,
+                y_expand: true
+            });
+            let credentialsCard = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-info-card quick-hotspot-credentials',
+                x_expand: true
+            });
+            let networkName = new St.Entry({
+                text: this._hotspotSsid,
+                hint_text: 'Nom du réseau (SSID)',
+                style_class: 'quick-hotspot-entry',
+                can_focus: true,
+                x_expand: true
+            });
+            let password = new St.Entry({
+                text: this._hotspotPassword,
+                hint_text: 'Mot de passe',
+                style_class: 'quick-hotspot-entry',
+                can_focus: true,
+                x_expand: true
+            });
+            credentialsCard.add_child(new St.Label({
+                text: 'Nom du réseau',
+                style_class: 'quick-field-label',
+                x_expand: true
+            }));
+            credentialsCard.add_child(networkName);
+            credentialsCard.add_child(new St.Label({
+                text: 'Mot de passe',
+                style_class: 'quick-field-label',
+                x_expand: true
+            }));
+            credentialsCard.add_child(password);
+            let bandLabel = new St.Label({
+                text: 'Bande Wi-Fi : lecture…',
+                style_class: 'quick-device-status',
+                x_expand: true
+            });
+            credentialsCard.add_child(bandLabel);
+            let saveButton = new St.Button({
+                label: 'Enregistrer les identifiants',
+                style_class: 'quick-device-action quick-hotspot-save',
+                reactive: true,
+                can_focus: true
+            });
+            credentialsCard.add_child(saveButton);
+            let help = new St.Label({
+                text: this._getActiveHotspot()
+                    ? 'Partage ces identifiants pour connecter un appareil.'
+                    : 'Ces identifiants seront utilisés au premier démarrage du point d’accès.',
+                style_class: 'quick-connect-subtitle',
+                x_expand: true
+            });
+            let saveStatus = new St.Label({
+                text: '',
+                style_class: 'quick-connect-subtitle',
+                x_expand: true
+            });
+            let showQrButton = new St.Button({
+                label: 'Afficher le QR code',
+                style_class: 'quick-device-action quick-hotspot-save',
+                reactive: true,
+                can_focus: true
+            });
+            details.add_child(credentialsCard);
+            details.add_child(help);
+            details.add_child(saveStatus);
+            details.add_child(showQrButton);
+
+            let activeHotspot = this._getActiveHotspot();
+            let updateCredentials = (ssid, psk) => {
+                let storedCredentialsMatch = ssid && ssid === this._hotspotSsid;
+                if (ssid) this._hotspotSsid = ssid;
+                if (psk) {
+                    this._hotspotPassword = psk;
+                } else if (activeHotspot && !storedCredentialsMatch) {
+                    this._hotspotPassword = null;
+                }
+                networkName.set_text(ssid || this._hotspotSsid || '');
+                password.set_text(this._hotspotPassword || '');
+                help.text = activeHotspot
+                    ? 'Partage ces identifiants pour connecter un appareil.'
+                    : 'Ces identifiants seront utilisés au premier démarrage du point d’accès.';
+            };
+
+            showQrButton.connect('clicked', () => {
+                this._showHotspotQrPage(networkName.get_text(), password.get_text());
+            });
+
+            let currentConnection = activeHotspot
+                ? activeHotspot.get_connection()
+                : this._getSavedHotspotConnection();
+            if (currentConnection) {
+                this._runNmcli([
+                    '-g',
+                    '802-11-wireless.band,802-11-wireless.channel',
+                    'connection', 'show', 'uuid', currentConnection.get_uuid()
+                ], (output, error) => {
+                    if (!menunet || !details.get_parent()) return;
+                    if (error) {
+                        bandLabel.text = 'Bande Wi-Fi : indisponible';
+                        log(`[PrismUI] Impossible de lire la bande du point d’accès : ${error}`);
+                        return;
+                    }
+                    let [band, channel] = output.split(/\r?\n/);
+                    let bandName = band === 'bg' ? '2,4 GHz' : band === 'a' ? '5 GHz' : 'automatique';
+                    let channelName = channel && channel !== '0' ? channel : '';
+                    if (activeHotspot) {
+                        let apDevice = this._nmClient.get_devices().find(device =>
+                            device.device_type === NM.DeviceType.WIFI &&
+                            device.active_connection === activeHotspot &&
+                            device.active_access_point
+                        );
+                        let frequency = apDevice ? apDevice.active_access_point.get_frequency() : 0;
+                        if (frequency >= 5925) {
+                            bandName = '6 GHz';
+                            channelName = frequency === 5935 ? '2' : String(Math.round((frequency - 5950) / 5));
+                        } else if (frequency >= 4900) {
+                            bandName = '5 GHz';
+                            channelName = String(Math.round((frequency - 5000) / 5));
+                        } else if (frequency >= 2400) {
+                            bandName = '2,4 GHz';
+                            channelName = frequency === 2484 ? '14' : String(Math.round((frequency - 2407) / 5));
+                        }
+                    }
+                    bandLabel.text = `Bande Wi-Fi : ${bandName}${channelName ? ` · canal ${channelName}` : ''}`;
+                });
+            } else {
+                bandLabel.text = 'Bande Wi-Fi : automatique (selon le matériel)';
+            }
+
+            saveButton.connect('clicked', () => {
+                let ssid = networkName.get_text().trim();
+                let psk = password.get_text();
+                if (!ssid || ssid.length > 32) {
+                    saveStatus.text = 'Le nom doit contenir entre 1 et 32 caractères.';
+                    return;
+                }
+                if (psk.length < 8 || psk.length > 63) {
+                    saveStatus.text = 'Le mot de passe doit contenir entre 8 et 63 caractères.';
+                    return;
+                }
+                this._hotspotSsid = ssid;
+                this._hotspotPassword = psk;
+                let saved = activeHotspot
+                    ? activeHotspot.get_connection()
+                    : this._getSavedHotspotConnection();
+                if (!saved) {
+                    saveButton.reactive = false;
+                    saveStatus.text = 'Création du profil point d’accès…';
+                    this._runNmcli([
+                        'connection', 'add',
+                        'type', 'wifi',
+                        'ifname', '*',
+                        'con-name', 'PrismUI Hotspot',
+                        '802-11-wireless.mode', 'ap',
+                        '802-11-wireless.ssid', ssid,
+                        '802-11-wireless-security.key-mgmt', 'wpa-psk',
+                        '802-11-wireless-security.psk', psk,
+                        'ipv4.method', 'shared',
+                        'ipv6.method', 'ignore'
+                    ], (output, error) => {
+                        if (!menunet || !details.get_parent()) return;
+                        saveButton.reactive = true;
+                        if (error) {
+                            saveStatus.text = 'Impossible de créer le profil du point d’accès.';
+                            log(`[PrismUI] Impossible de créer le profil du point d’accès : ${error}`);
+                            this._notifyQuickSettingUnavailable('Identifiants non enregistrés', error);
+                            return;
+                        }
+                        saveStatus.text = 'Profil et identifiants enregistrés.';
+                        this._updateQuickShortcutStates();
+                    });
+                    return;
+                }
+
+                saveButton.reactive = false;
+                saveStatus.text = 'Enregistrement…';
+                this._runNmcli([
+                    'connection', 'modify', 'uuid', saved.get_uuid(),
+                    '802-11-wireless.ssid', ssid,
+                    '802-11-wireless-security.psk', psk
+                ], (output, error) => {
+                    if (!menunet || !details.get_parent()) return;
+                    saveButton.reactive = true;
+                    if (error) {
+                        saveStatus.text = 'Impossible d’enregistrer les identifiants.';
+                        log(`[PrismUI] Impossible de modifier les identifiants du point d’accès : ${error}`);
+                        this._notifyQuickSettingUnavailable('Identifiants non enregistrés', error);
+                        return;
+                    }
+                    saveStatus.text = activeHotspot
+                        ? 'Identifiants enregistrés ; redémarrage du point d’accès…'
+                        : 'Identifiants enregistrés.';
+                    if (!activeHotspot) return;
+                    this._nmClient.deactivate_connection_async(activeHotspot, null, (client, result) => {
+                        try {
+                            client.deactivate_connection_finish(result);
+                            let wifiDevice = this._nmClient.get_devices().find(device =>
+                                device.device_type === NM.DeviceType.WIFI && device.get_managed()
+                            );
+                            this._nmClient.activate_connection_async(
+                                saved, wifiDevice, null, null,
+                                (nmClient, activationResult) => {
+                                    try {
+                                        nmClient.activate_connection_finish(activationResult);
+                                        if (menunet && details.get_parent())
+                                            saveStatus.text = 'Point d’accès redémarré avec les nouveaux identifiants.';
+                                    } catch (activationError) {
+                                        log(`[PrismUI] Impossible de redémarrer le point d’accès après modification : ${activationError.message}`);
+                                        if (menunet && details.get_parent())
+                                            saveStatus.text = 'Identifiants enregistrés. Réactive le point d’accès pour appliquer les changements.';
+                                    }
+                                }
+                            );
+                        } catch (deactivationError) {
+                            log(`[PrismUI] Impossible d’arrêter le point d’accès avant son redémarrage : ${deactivationError.message}`);
+                            if (menunet && details.get_parent())
+                                saveStatus.text = 'Identifiants enregistrés. Désactive puis réactive le point d’accès pour appliquer les changements.';
+                        }
+                    });
+                });
+            });
+
+            if (activeHotspot) {
+                let connection = activeHotspot.get_connection();
+                let uuid = connection ? connection.get_uuid() : null;
+                if (uuid) {
+                    this._runNmcli([
+                        '--show-secrets',
+                        '-g',
+                        '802-11-wireless.ssid,802-11-wireless-security.psk',
+                        'connection', 'show', 'uuid', uuid
+                    ], (output, error) => {
+                        if (error) {
+                            log(`[PrismUI] Impossible de lire les identifiants du point d’accès : ${error}`);
+                            this._hotspotSsid = null;
+                            this._hotspotPassword = null;
+                            networkName.set_text('');
+                            password.set_text('');
+                            saveStatus.text = 'NetworkManager n’a pas communiqué les identifiants.';
+                            return;
+                        }
+                        let [ssid, psk] = output.split(/\r?\n/);
+                        updateCredentials(ssid || this._hotspotSsid, psk || this._hotspotPassword);
+                    });
+                } else {
+                    updateCredentials(this._hotspotSsid, this._hotspotPassword);
+                }
+            } else {
+                let savedConnection = this._getSavedHotspotConnection();
+                if (savedConnection) {
+                    this._runNmcli([
+                        '--show-secrets',
+                        '-g',
+                        '802-11-wireless.ssid,802-11-wireless-security.psk',
+                        'connection', 'show', 'uuid', savedConnection.get_uuid()
+                    ], (output, error) => {
+                        if (error) {
+                            log(`[PrismUI] Impossible de lire le profil de point d’accès enregistré : ${error}`);
+                            this._hotspotSsid = null;
+                            this._hotspotPassword = null;
+                            networkName.set_text('');
+                            password.set_text('');
+                            saveStatus.text = 'NetworkManager n’a pas communiqué les identifiants.';
+                            return;
+                        }
+                        let [ssid, psk] = output.split(/\r?\n/);
+                        updateCredentials(ssid || this._hotspotSsid, psk || this._hotspotPassword);
+                    });
+                } else {
+                    updateCredentials(this._hotspotSsid, this._hotspotPassword);
+                }
+            }
+            return details;
+        });
+    }
+
+    _showHotspotQrPage(ssid, password) {
+        this._showQuickSettingsPage('Code QR', 'network-wireless-hotspot-symbolic', () => {
+            let qrPage = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-settings-details quick-hotspot-qr-page',
+                x_expand: true,
+                y_expand: true
+            });
+            let status = new St.Label({
+                text: '',
+                style_class: 'quick-connect-subtitle',
+                x_expand: true
+            });
+            let installButton = new St.Button({
+                label: 'Installer qrencode',
+                style_class: 'quick-hotspot-install-button',
+                reactive: true,
+                can_focus: true,
+                visible: false
+            });
+            installButton.connect('clicked', () => {
+                this._installQrencode(installButton, status, qrPage, ssid, password);
+            });
+            qrPage.add_child(status);
+            qrPage.add_child(installButton);
+            this._generateHotspotQrCode(ssid, password, qrPage, status, installButton);
+            return qrPage;
+        });
+    }
+
+    _generateHotspotQrCode(ssid, password, details, statusLabel, installButton) {
+        if (details._hotspotQrImage) {
+            details.remove_child(details._hotspotQrImage);
+            details._hotspotQrImage.destroy();
+            details._hotspotQrImage = null;
+        }
+        if (details._hotspotQrPath) {
+            try {
+                Gio.File.new_for_path(details._hotspotQrPath).delete(null);
+            } catch (e) {
+                log(`[PrismUI] Impossible de supprimer l’ancien QR temporaire : ${e.message}`);
+            }
+            if (menunet && menunet._hotspotQrPath === details._hotspotQrPath)
+                menunet._hotspotQrPath = null;
+            details._hotspotQrPath = null;
+        }
+        if (!password || !menunet) {
+            statusLabel.text = 'QR indisponible : le mot de passe du réseau n’est pas connu.';
+            return;
+        }
+        if (!GLib.find_program_in_path('qrencode')) {
+            statusLabel.text = 'qrencode est requis. Son installation demandera une autorisation administrateur.';
+            installButton.visible = true;
+            return;
+        }
+        let escapeWifiValue = value => value.replace(/[\\;,":]/g, character => `\\${character}`);
+        let payload = `WIFI:T:WPA;S:${escapeWifiValue(ssid)};P:${escapeWifiValue(password)};;`;
+        let qrPath = GLib.build_filenamev([
+            GLib.get_tmp_dir(),
+            `prism-hotspot-${GLib.uuid_string_random()}.png`
+        ]);
+        try {
+            let process = Gio.Subprocess.new(
+                ['qrencode', '-o', qrPath, '-s', '5'],
+                Gio.SubprocessFlags.STDIN_PIPE |
+                    Gio.SubprocessFlags.STDOUT_PIPE |
+                    Gio.SubprocessFlags.STDERR_PIPE
+            );
+            process.communicate_utf8_async(payload, null, (subprocess, result) => {
+                try {
+                    let [communicated, , stderr] = subprocess.communicate_utf8_finish(result);
+                    if (!communicated || !subprocess.get_successful() || !menunet || !details.get_parent()) {
+                        statusLabel.text = 'QR indisponible : échec de génération.';
+                        if (stderr) log(`[PrismUI] Génération du QR code impossible : ${stderr.trim()}`);
+                        try {
+                            Gio.File.new_for_path(qrPath).delete(null);
+                        } catch (e) {
+                            if (Gio.File.new_for_path(qrPath).query_exists(null)) {
+                                log(`[PrismUI] Impossible de supprimer le QR temporaire : ${e.message}`);
+                            }
+                        }
+                        return;
+                    }
+                    let qrFile = Gio.File.new_for_path(qrPath);
+                    let qrImage = new St.Icon({
+                        gicon: new Gio.FileIcon({ file: qrFile }),
+                        icon_size: 160,
+                        style_class: 'quick-hotspot-qr'
+                    });
+                    details.insert_child_at_index(qrImage, Math.max(1, details.get_n_children() - 1));
+                    details._hotspotQrImage = qrImage;
+                    details._hotspotQrPath = qrPath;
+                    statusLabel.text = 'Scanne ce code pour rejoindre le réseau.';
+                    menunet._hotspotQrPath = qrPath;
+                } catch (e) {
+                    statusLabel.text = 'QR indisponible.';
+                    log(`[PrismUI] Erreur de création de l’image QR : ${e.message}`);
+                    try {
+                        Gio.File.new_for_path(qrPath).delete(null);
+                    } catch (deleteError) {
+                        log(`[PrismUI] Impossible de supprimer le QR temporaire : ${deleteError.message}`);
+                    }
+                }
+            });
+        } catch (e) {
+            statusLabel.text = `Impossible de lancer qrencode : ${e.message}`;
+            log(`[PrismUI] Impossible de lancer qrencode : ${e.message}`);
+        }
+    }
+
+    _installQrencode(button, statusLabel, details, ssid, password) {
+        button.reactive = false;
+        button.can_focus = false;
+        statusLabel.text = 'Installation de qrencode : autorise la demande administrateur…';
+        try {
+            let process = Gio.Subprocess.new(
+                ['pkexec', 'apt-get', 'install', '-y', 'qrencode'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
+            );
+            process.communicate_utf8_async(null, null, (subprocess, result) => {
+                try {
+                    let [communicated, stdout, stderr] = subprocess.communicate_utf8_finish(result);
+                    button.reactive = true;
+                    button.can_focus = true;
+                    if (!communicated)
+                        throw new Error('Impossible de lire la sortie du processus.');
+                    if (!subprocess.get_successful()) {
+                        let exitCode = subprocess.get_exit_status();
+                        let output = (stderr || stdout || '').trim().split(/\r?\n/).slice(-3).join(' ').slice(-180);
+                        let reason = output ? ` : ${output}` : '';
+                        if (menunet && details.get_parent())
+                            statusLabel.text = `Installation échouée (code ${exitCode})${reason}`;
+                        log(`[PrismUI] Installation de qrencode échouée (code ${exitCode})${reason}`);
+                        return;
+                    }
+                    if (!menunet || !details.get_parent())
+                        return;
+                    button.visible = false;
+                    statusLabel.text = 'qrencode installé ; création du QR code…';
+                    this._generateHotspotQrCode(ssid, password, details, statusLabel, button);
+                } catch (e) {
+                    button.reactive = true;
+                    button.can_focus = true;
+                    if (menunet && details.get_parent())
+                        statusLabel.text = `Impossible de vérifier l’installation : ${e.message}`;
+                    log(`[PrismUI] Impossible de vérifier l’installation de qrencode : ${e.message}`);
+                }
+            });
+        } catch (e) {
+            button.reactive = true;
+            button.can_focus = true;
+            statusLabel.text = 'Impossible de lancer l’installation de qrencode.';
+            log(`[PrismUI] Impossible de lancer pkexec pour qrencode : ${e.message}`);
+        }
+    }
+
+    _activateQuickShortcut(name) {
+        switch (name) {
+        case 'airplane':
+            this._setAirplaneMode(!(
+                this._rfkillManager && this._rfkillManager.airplane_mode
+            ));
+            break;
+        case 'darkTheme':
+            if (!this._interfaceSettings) {
+                this._notifyQuickSettingUnavailable('Thème indisponible', 'Le réglage de thème GNOME n’est pas disponible.');
+                return;
+            }
+            let themeChanged = this._interfaceSettings.set_string(
+                'color-scheme',
+                this._interfaceSettings.get_string('color-scheme') === 'prefer-dark' ? 'prefer-light' : 'prefer-dark'
+            );
+            if (!themeChanged) {
+                this._notifyQuickSettingUnavailable('Thème non modifié', 'GNOME n’a pas accepté le changement de thème.');
+            }
+            break;
+        case 'powerSaver':
+            this._togglePowerSaver();
+            break;
+        case 'hotspot':
+            this._toggleHotspot();
+            break;
+        case 'nightLight':
+            if (!this._nightLightSettings) {
+                this._notifyQuickSettingUnavailable('Éclairage nocturne indisponible', 'Le réglage GNOME de l’éclairage nocturne n’est pas disponible.');
+                return;
+            }
+            let nightLightChanged = this._nightLightSettings.set_boolean(
+                'night-light-enabled',
+                !this._nightLightSettings.get_boolean('night-light-enabled')
+            );
+            if (!nightLightChanged) {
+                this._notifyQuickSettingUnavailable('Éclairage nocturne non modifié', 'GNOME n’a pas accepté le changement de réglage.');
+            }
+            break;
+        }
+        this._updateQuickShortcutStates();
+    }
+
+    _setQuickToggleState(circle, enabled) {
+        if (!circle) return;
+        if (enabled) {
+            circle.add_style_class_name('active');
+        } else {
+            circle.remove_style_class_name('active');
+        }
+    }
+
+    _updateQuickToggleStates() {
+        let wifiEnabled = !!(
+            this._nmClient &&
+            this._nmClient.wireless_enabled &&
+            this._nmClient.wireless_hardware_enabled
+        );
+        let bluetoothAvailable = !!(
+            this._bluetoothClient &&
+            this._bluetoothClient.default_adapter
+        );
+        this._setQuickToggleState(this._wifiToggleCircle, wifiEnabled);
+        this._setQuickToggleState(
+            this._bluetoothToggleCircle,
+            bluetoothAvailable && this._bluetoothClient.default_adapter_powered
+        );
+    }
+
+    _toggleWifi() {
+        if (!this._nmClient) {
+            log('[PrismUI] Impossible de basculer le Wi-Fi : NetworkManager est indisponible.');
+            return;
+        }
+        if (!this._nmClient.wireless_hardware_enabled) {
+            log('[PrismUI] Impossible d’activer le Wi-Fi : le commutateur matériel le bloque.');
+            return;
+        }
+        this._nmClient.wireless_enabled = !this._nmClient.wireless_enabled;
+        this._updateQuickShortcutStates();
+    }
+
+    _toggleBluetooth() {
+        if (!this._bluetoothClient || !this._bluetoothClient.default_adapter) {
+            log('[PrismUI] Impossible de basculer Bluetooth : aucun adaptateur disponible.');
+            this._notifyBluetoothUnavailable();
+            return;
+        }
+
+        try {
+            let powered = this._bluetoothClient.default_adapter_powered;
+            if (this._bluetoothRfkillProxy) {
+                this._bluetoothRfkillProxy.get_connection().call(
+                    'org.gnome.SettingsDaemon.Rfkill',
+                    '/org/gnome/SettingsDaemon/Rfkill',
+                    'org.freedesktop.DBus.Properties',
+                    'Set',
+                    new GLib.Variant('(ssv)', [
+                        'org.gnome.SettingsDaemon.Rfkill',
+                        'BluetoothAirplaneMode',
+                        new GLib.Variant('b', powered)
+                    ]),
+                    null,
+                    Gio.DBusCallFlags.NONE,
+                    -1,
+                    null,
+                    (connection, result) => {
+                        try {
+                            connection.call_finish(result);
+                            if (!powered && this._bluetoothClient) {
+                                this._bluetoothClient.default_adapter_powered = true;
+                            }
+                        } catch (e) {
+                            log(`[PrismUI] Impossible de modifier Bluetooth via RFKill : ${e.message}`);
+                            this._notifyQuickSettingUnavailable('Bluetooth non modifié', e.message);
+                        }
+                    }
+                );
+            } else {
+                this._initBluetoothRfkill();
+                this._bluetoothClient.default_adapter_powered = !powered;
+            }
+        } catch (e) {
+            log(`[PrismUI] Impossible de basculer Bluetooth : ${e.message}`);
+            this._notifyQuickSettingUnavailable('Bluetooth non modifié', e.message);
+        }
+    }
+
+    _notifyBluetoothUnavailable() {
+        if (global.notificationManager) {
+            global.notificationManager.showNotification(
+                'Bluetooth indisponible',
+                'Aucun adaptateur Bluetooth n’est détecté sur cet appareil.',
+                'Système',
+                'bluetooth-symbolic'
+            );
+        }
     }
 
     _updateNetworkIcon() {
@@ -2245,116 +3364,165 @@ class NetworkSetting {
 
     _setPosition() {
         let monitor = Main.layoutManager.primaryMonitor;
-        if (!monitor || !this.container || this.container.width <= 0) return;
+        if (!monitor) return;
 
-        let targetX = Math.round(monitor.x + monitor.width - this.container.width - 20);
-        let targetY = Math.round(monitor.y + 23);
-        
-        let currentX = Math.round(this.container.x);
-        let currentY = Math.round(this.container.y);
+        let targetY = Math.round(monitor.y + 11);
 
-        if (currentX !== targetX || currentY !== targetY) {
-            this.container.set_position(targetX, targetY);
+        if (this.container && this.container.width > 0) {
+            let targetX = Math.round(monitor.x + monitor.width - this.container.width - 15);
+            let currentX = Math.round(this.container.x);
+            let currentY = Math.round(this.container.y);
+
+            if (currentX !== targetX || currentY !== targetY) {
+                this.container.set_position(targetX, targetY);
+            }
+        }
+
+        if (this.clockContainer && this.clockContainer.width > 0) {
+            let clockX = Math.round(monitor.x + 15);
+            let currentClockX = Math.round(this.clockContainer.x);
+            let currentClockY = Math.round(this.clockContainer.y);
+
+            if (currentClockX !== clockX || currentClockY !== targetY) {
+                this.clockContainer.set_position(clockX, targetY);
+            }
         }
     }
 
-
-    async _accessibilityMenu() {
-        let menuWidth = 280;
-        let menuHeight = 310;
-        let menuX = Math.floor((Main.layoutManager.primaryMonitor.x + Main.layoutManager.primaryMonitor.width - menuWidth) - 20);
-
-        let topOffset = 110;
-        let menuY = Main.layoutManager.primaryMonitor.y + topOffset;
-    
-        let menu = new St.BoxLayout({
-            vertical: true,
-            name: 'net-box-menu',
-            style_class: 'net-box',
-            reactive: true
+    _updateClock() {
+        if (!this.clockLabel) return;
+        let now = new Date();
+        let weekday = now.toLocaleDateString('fr-FR', {
+            weekday: 'short'
         });
-    
+        let date = now.toLocaleDateString('fr-FR', {
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+        });
+        let time = now.toLocaleTimeString('fr-FR', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hourCycle: 'h23'
+        });
+        let formattedWeekday = weekday.charAt(0).toLocaleUpperCase('fr-FR') + weekday.slice(1);
+        this.clockLabel.set_text(`${time}   ${formattedWeekday} ${date}`);
+    }
+
+    _showQuickSettingsPage(title, iconName, buildContent) {
+        if (!menunet || !this._quickSettingsHome) return;
+
+        if (this._quickSettingsPage) {
+            if (menunet._hotspotQrPath) {
+                try {
+                    Gio.File.new_for_path(menunet._hotspotQrPath).delete(null);
+                } catch (e) {
+                    log(`[PrismUI] Impossible de supprimer le QR temporaire du point d’accès : ${e.message}`);
+                }
+                menunet._hotspotQrPath = null;
+            }
+            this._quickSettingsPage.destroy();
+            this._quickSettingsPage = null;
+        }
+
+        let page = new St.BoxLayout({
+            vertical: true,
+            style_class: 'quick-settings-page',
+            x_expand: true,
+            y_expand: true
+        });
         let header = new St.BoxLayout({
             vertical: false,
-            name: 'header-acess',
-            style_class: 'header-accessibility'
+            style_class: 'quick-page-header',
+            x_expand: true
         });
-    
-        let title = new St.Label({
-            text: 'Options d\'accessibilité',
-            style_class: 'label-title'
+        let backButton = new St.Button({
+            style_class: 'toggle-btn',
+            child: new St.Icon({ icon_name: 'go-previous-symbolic', icon_size: 16 })
         });
-    
-        header.add_child(title);
-        menu.add_child(header);
-    
-        let optionsList = new St.BoxLayout({
-            vertical: true,
-            name: 'option-list',
-            style_class: 'options-list'
+        backButton.connect('clicked', () => this._showQuickSettingsHome());
+
+        header.add_child(backButton);
+        header.add_child(new St.Icon({
+            icon_name: iconName,
+            icon_size: 20,
+            style_class: 'quick-page-header-icon'
+        }));
+        let pageTitle = new St.Label({
+            text: title,
+            style_class: 'quick-page-title',
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true
         });
-    
-        menu.add_child(optionsList);
-    
+        header.add_child(pageTitle);
+        page.add_child(header);
+        page.add_child(buildContent());
+
+        this._quickSettingsHome.hide();
+        menunet.add_child(page);
+        this._quickSettingsPage = page;
+    }
+
+    _showQuickSettingsHome() {
+        if (this._quickSettingsPage) {
+            this._quickSettingsPage.destroy();
+            this._quickSettingsPage = null;
+        }
+        if (this._quickSettingsHome) this._quickSettingsHome.show();
+    }
+
+    _showAccessibilityPage() {
         let settings = [
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-keyboard-enabled', name: 'Clavier à l\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-magnifier-enabled', name: 'Loupe d\'écran' },
             { schema: 'org.gnome.desktop.a11y.applications', key: 'screen-reader-enabled', name: 'Lecteur d\'écran' },
             { schema: 'org.gnome.desktop.a11y.interface', key: 'high-contrast', name: 'Contraste élevé' }
         ];
-    
-        settings.forEach(setting => {
-            let item = new St.BoxLayout({
-                vertical: false,
-                name: 'option-item-box',
-                style_class: 'option-item'
+
+        this._showQuickSettingsPage('Accessibilité', 'preferences-desktop-accessibility-symbolic', () => {
+            let optionsList = new St.BoxLayout({
+                vertical: true,
+                style_class: 'options-list',
+                x_expand: true,
+                y_expand: true
             });
-    
-            let label = new St.Label({
-                text: setting.name,
-                style_class: 'option-label'
-            });
-    
-            let button = new St.Button({
-                style_class: 'option-button',
-                reactive: true
-            });
-    
             let iconPathOn = `${this._ext.path}/icons/interface/toggle/toggle-button-on.png`;
             let iconPathOff = `${this._ext.path}/icons/interface/toggle/toggle-button-off.png`;
-    
-            let icon = new St.Icon({
-                gicon: Gio.icon_new_for_string(this._getSetting(setting.schema, setting.key) ? iconPathOn : iconPathOff),
-                style_class: 'option-icon',
-                icon_size: 24
+
+            settings.forEach(setting => {
+                let item = new St.BoxLayout({
+                    vertical: false,
+                    style_class: 'option-item',
+                    x_expand: true
+                });
+                let label = new St.Label({
+                    text: setting.name,
+                    style_class: 'option-label',
+                    y_align: Clutter.ActorAlign.CENTER,
+                    x_expand: true
+                });
+                let button = new St.Button({
+                    style_class: 'option-button',
+                    reactive: true
+                });
+                let icon = new St.Icon({
+                    gicon: Gio.icon_new_for_string(this._getSetting(setting.schema, setting.key) ? iconPathOn : iconPathOff),
+                    style_class: 'option-icon',
+                    icon_size: 24
+                });
+                button.set_child(icon);
+                button.connect('clicked', () => {
+                    let newState = !this._getSetting(setting.schema, setting.key);
+                    this._setSetting(setting.schema, setting.key, newState);
+                    icon.gicon = Gio.icon_new_for_string(newState ? iconPathOn : iconPathOff);
+                });
+
+                item.add_child(label);
+                item.add_child(button);
+                optionsList.add_child(item);
             });
-    
-            button.set_child(icon);
-    
-            button.connect('clicked', () => {
-                let currentState = this._getSetting(setting.schema, setting.key);
-                let newState = !currentState;
-                this._setSetting(setting.schema, setting.key, newState);
-    
-                icon.gicon = Gio.icon_new_for_string(newState ? iconPathOn : iconPathOff);
-            });
-    
-            item.add_child(label);
-            item.add_child(button);
-    
-            optionsList.add_child(item);
+            return optionsList;
         });
-    
-        menu.set_position(menuX, menuY);
-        menu.set_size(menuWidth, menuHeight);
-    
-        Main.layoutManager.addChrome(menu);
-    
-        menu.connect('destroy', () => {
-            Main.layoutManager.removeChrome(menu);
-        });
-    
-        return menu;
     }
 
     _getSetting(schema, settingKey) {
@@ -2385,126 +3553,484 @@ class NetworkSetting {
         this._mainMenuOpen = true;
         this._tooltipsLocked = true;
         this._hideStatusTooltip();
+        this._initBluetooth();
+        this._initQuickShortcutSettings();
 
-        let menunetWidth = 267;
-        let menunetHeight = 375;
         let monitor = Main.layoutManager.primaryMonitor;
+        let menunetWidth = Math.min(420, monitor.width - 32);
+        let menunetHeight = Math.min(_isPC ? 400 : 485, monitor.height - 32);
         let menunetX = Math.floor((monitor.x + monitor.width - menunetWidth) - 20);
-        let topOffset = 110;
-        let menunetY = monitor.y + topOffset;
+        let topBarBottom = this.container
+            ? this.container.y + this.container.height
+            : monitor.y + 65;
+        let menunetY = Math.min(topBarBottom + 5, monitor.y + monitor.height - menunetHeight + 4);
 
         menunet = new St.BoxLayout({
             vertical: true,
             name: 'net-boxmn',
             style_class: 'net-boxmn'
         });
+        this._quickSettingsHome = new St.BoxLayout({
+            vertical: true,
+            style_class: 'quick-settings-home',
+            x_expand: true,
+            y_expand: true
+        });
+        this._quickSettingsPage = null;
 
         menunet.set_position(menunetX, menunetY);
 
-        if(_isPC) {
-            menunet.set_size(menunetWidth, menunetHeight - 43);
-        } else {
-            menunet.set_size(menunetWidth, menunetHeight);
-        }
+        menunet.set_size(menunetWidth, menunetHeight);
         
-        let now = new Date();
-        let dateLabel = new St.Label({ text: now.toLocaleDateString(), style_class: 'date-labelmn' });
-        let timeLabel = new St.Label({ text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), style_class: 'time-labelmn' });
-        let dateBox = new St.BoxLayout({ vertical: true, name: 'datetime-box', style_class: 'datetime-box' });
-        dateBox.add_child(timeLabel);
-        dateBox.add_child(dateLabel);
-
-        function createToggleRow(iconName, title) {
-            let row = new St.BoxLayout({ 
-                vertical: false, 
-                name: 'tgl-row', 
-                style_class: 'toggle-row',
-                x_expand: true,
-                x_align: Clutter.ActorAlign.START
-            });
-            
-            let icon = new St.Icon({ icon_name: iconName, icon_size: 18, style_class: 'toggle-icon' });
-            let label = new St.Label({ text: title, style_class: 'toggle-label', y_align: Clutter.ActorAlign.CENTER });
-
-            row.add_child(icon);
-            row.add_child(label);
-
-            let btn = new St.Button({ 
-                style_class: 'toggle-btn',
-                x_expand: true,
-                x_align: Clutter.ActorAlign.FILL
-            });
-            btn.set_child(row);
-            return btn;
-        }
-
-        let wifiBtn = createToggleRow('network-wireless-symbolic', 'Wi-Fi');
-        let bleBtn = createToggleRow('bluetooth-symbolic', 'Bluetooth');
-        let accBtn = createToggleRow('preferences-desktop-accessibility-symbolic', 'Accessibilité');
-
-        let controlBox = new St.BoxLayout({
-            vertical: true,
-            name: 'control-box',
-            style_class: 'control-box',
+        let powerButtonsBox = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-power-row',
             x_expand: true,
             x_align: Clutter.ActorAlign.FILL
         });
+        let quickSettingsTitle = new St.Label({
+            text: 'Centre de contrôle',
+            style_class: 'quick-power-title',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        let logoutBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-log-out-symbolic' })
+        });
+        let rebootBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-reboot-symbolic' })
+        });
+        let shutdownBtn = new St.Button({
+            style_class: 'bottom-btn quick-power-btn',
+            child: new St.Icon({ icon_name: 'system-shutdown-symbolic' })
+        });
+        logoutBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('gnome-session-quit --logout'); });
+        rebootBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl reboot'); });
+        shutdownBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl poweroff'); });
+        powerButtonsBox.add_child(quickSettingsTitle);
+        powerButtonsBox.add_child(logoutBtn);
+        powerButtonsBox.add_child(rebootBtn);
+        powerButtonsBox.add_child(shutdownBtn);
 
+        function createToggleTile(iconName, title, subtitle) {
+            let tile = new St.BoxLayout({
+                vertical: false,
+                style_class: 'quick-connect-tile',
+                x_expand: true
+            });
+            let icon = new St.Icon({
+                icon_name: iconName,
+                icon_size: 24,
+                style_class: 'toggle-icon'
+            });
+            let iconCircle = new St.Bin({
+                style_class: 'quick-connect-icon-circle',
+                child: icon
+            });
+            let labels = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-connect-labels',
+                x_expand: true
+            });
+            labels.add_child(new St.Label({ text: title, style_class: 'toggle-label' }));
+            labels.add_child(new St.Label({ text: subtitle, style_class: 'quick-connect-subtitle' }));
+            tile.add_child(iconCircle);
+            tile.add_child(labels);
+            let button = new St.Button({
+                style_class: 'toggle-btn quick-connect-btn',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
+                child: tile
+            });
+            button.set_width(Math.floor((menunetWidth - 30 - 10) / 2));
+            return { button, iconCircle };
+        }
+
+        let controlBox = new St.BoxLayout({
+            vertical: false,
+            name: 'control-box',
+            style_class: 'quick-connect-row',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
+        });
         controlBox.set_width(menunetWidth - 30);
 
-        wifiBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._closeAllMenus();
-                
-                if (global.notificationManager) {
-                    global.notificationManager.showNotification(
-                        "Wi-Fi", 
-                        "Cette fonctionnalité est en cours de développement.", 
-                        "Système", 
-                        "network-wireless-symbolic"
-                    );
-                }
-                return GLib.SOURCE_REMOVE;
+        let wifiToggle = createToggleTile('network-wireless-symbolic', 'Wi-Fi', 'Gérer le réseau');
+        let wifiBtn = wifiToggle.button;
+        this._wifiToggleCircle = wifiToggle.iconCircle;
+        let bluetoothToggle = createToggleTile('bluetooth-symbolic', 'Bluetooth', 'Appareils');
+        let bleBtn = bluetoothToggle.button;
+        this._bluetoothToggleCircle = bluetoothToggle.iconCircle;
+        this._updateQuickToggleStates();
+
+        let showWifiDetails = () => this._showQuickSettingsPage('Wi-Fi', 'network-wireless-symbolic', () => {
+            let details = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-settings-details quick-network-details',
+                x_expand: true
             });
+            let primaryConnection = this._nmClient
+                ? this._nmClient.get_primary_connection()
+                : null;
+            let primaryType = primaryConnection
+                ? primaryConnection.get_connection_type()
+                : '';
+            let accessPointDevice = this._nmClient
+                ? this._nmClient.get_devices().find(device =>
+                    device.device_type === NM.DeviceType.WIFI &&
+                    device.active_connection === primaryConnection &&
+                    device.active_access_point &&
+                    !(device.active_connection &&
+                        device.active_connection.get_connection() &&
+                        device.active_connection.get_connection().get_setting_wireless() &&
+                        device.active_connection.get_connection().get_setting_wireless().mode === 'ap')
+                )
+                : null;
+            let hotspotActive = !!this._getActiveHotspot();
+
+            if (hotspotActive && !accessPointDevice) {
+                details.add_child(new St.Label({
+                    text: 'Le Wi-Fi ne peut pas être utilisé en même temps que le point d’accès sur cette machine.',
+                    style_class: 'quick-info-card quick-info-message',
+                    x_expand: true
+                }));
+                return details;
+            }
+
+            if (!accessPointDevice || !primaryType.includes('wireless')) {
+                details.add_child(new St.Label({
+                    text: 'La connexion Wi-Fi n’est pas utilisée pour le moment.',
+                    style_class: 'quick-info-card quick-info-message',
+                    x_expand: true
+                }));
+                return details;
+            }
+
+            let currentNetwork = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-info-section',
+                x_expand: true
+            });
+            currentNetwork.add_child(new St.Label({
+                text: 'Réseau actuel',
+                style_class: 'quick-section-title',
+                x_expand: true
+            }));
+            let networkCard = new St.BoxLayout({
+                vertical: false,
+                style_class: 'quick-device-card',
+                x_expand: true
+            });
+            let networkLabels = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-device-labels',
+                x_expand: true
+            });
+            let ssidBytes = accessPointDevice.active_access_point.get_ssid();
+            let currentSsid = ssidBytes
+                ? NM.utils_ssid_to_utf8(ssidBytes.get_data())
+                : '';
+            networkLabels.add_child(new St.Label({
+                text: currentSsid || 'Réseau Wi-Fi',
+                style_class: 'quick-device-name',
+                x_expand: true
+            }));
+            networkLabels.add_child(new St.Label({
+                text: 'Connecté',
+                style_class: 'quick-device-status',
+                x_expand: true
+            }));
+            networkCard.add_child(networkLabels);
+            let disconnectButton = new St.Button({
+                label: 'Déconnecter',
+                style_class: 'quick-device-action',
+                reactive: true,
+                can_focus: true
+            });
+            disconnectButton.connect('clicked', () => {
+                let activeConnection = accessPointDevice.active_connection;
+                if (!activeConnection || !this._nmClient) return;
+                disconnectButton.reactive = false;
+                this._nmClient.deactivate_connection_async(activeConnection, null, (client, result) => {
+                    try {
+                        client.deactivate_connection_finish(result);
+                        showWifiDetails();
+                    } catch (e) {
+                        disconnectButton.reactive = true;
+                        log(`[PrismUI] Impossible de déconnecter le réseau Wi-Fi : ${e.message}`);
+                        this._notifyQuickSettingUnavailable('Wi-Fi non déconnecté', e.message);
+                    }
+                });
+            });
+            networkCard.add_child(disconnectButton);
+            currentNetwork.add_child(networkCard);
+            details.add_child(currentNetwork);
+            return details;
         });
 
-        bleBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                this._closeAllMenus();
-                
-                if (global.notificationManager) {
-                    global.notificationManager.showNotification(
-                        "Bluetooth", 
-                        "Cette fonctionnalité est en cours de développement.", 
-                        "Système", 
-                        "bluetooth-symbolic"
-                    );
-                }
-                return GLib.SOURCE_REMOVE;
-            });
-        });
+        let showBluetoothDetails = () => {
+            if (!this._bluetoothClient || !this._bluetoothClient.default_adapter) {
+                log('[PrismUI] Impossible d’ouvrir les détails Bluetooth : aucun adaptateur disponible.');
+                this._notifyBluetoothUnavailable();
+                return;
+            }
+            this._showQuickSettingsPage('Bluetooth', 'bluetooth-symbolic', () => {
+                let details = new St.BoxLayout({
+                    vertical: true,
+                    style_class: 'quick-settings-details quick-network-details',
+                    x_expand: true
+                });
+                let section = new St.BoxLayout({
+                    vertical: true,
+                    style_class: 'quick-info-section',
+                    x_expand: true
+                });
+                section.add_child(new St.Label({
+                    text: 'Appareils appairés',
+                    style_class: 'quick-section-title',
+                    x_expand: true
+                }));
+                let deviceList = new St.BoxLayout({
+                    vertical: true,
+                    style_class: 'quick-device-list',
+                    x_expand: true
+                });
+                section.add_child(deviceList);
+                details.add_child(section);
+                let loading = new St.Label({
+                    text: 'Chargement des appareils appairés…',
+                    style_class: 'quick-info-card quick-info-message',
+                    x_expand: true
+                });
+                details.add_child(loading);
 
-        accBtn.connect('clicked', () => {
-            GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-                if (Accesmenu) {
-                    Accesmenu.destroy();
-                    Accesmenu = null;
+                let deviceSignalIds = [];
+                let trackedDevices = new Set();
+                let refreshQueued = false;
+                let refreshPairedDevices = () => {
+                    if (!menunet || !details.get_parent()) return;
+                    deviceList.destroy_all_children();
+                    if (!this._bluetoothClient.default_adapter_powered) {
+                        loading.text = 'Active le Bluetooth pour connecter les appareils appairés.';
+                        loading.show();
+                        return;
+                    }
+                    let store = this._bluetoothClient.get_devices();
+                    let devices = [];
+                    for (let index = 0; index < store.get_n_items(); index++) {
+                        let device = store.get_item(index);
+                        if (!device.paired && !device.trusted)
+                            continue;
+                        devices.push(device);
+
+                        let objectPath = device.get_object_path();
+                        if (!trackedDevices.has(objectPath)) {
+                            trackedDevices.add(objectPath);
+                            for (let property of ['alias', 'paired', 'trusted', 'connected']) {
+                                let id = device.connect(`notify::${property}`, () => {
+                                    if (refreshQueued || !menunet || !details.get_parent())
+                                        return;
+                                    refreshQueued = true;
+                                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                                        refreshQueued = false;
+                                        refreshPairedDevices();
+                                        return GLib.SOURCE_REMOVE;
+                                    });
+                                });
+                                deviceSignalIds.push([device, id]);
+                            }
+                        }
+                    }
+
+                    if (!devices.length) {
+                        loading.text = 'Aucun appareil appairé.';
+                        loading.show();
+                        return;
+                    }
+
+                    loading.hide();
+                    for (let device of devices) {
+                        let name = device.alias || device.name || device.address || 'Appareil Bluetooth';
+                        let card = new St.BoxLayout({
+                            vertical: false,
+                            style_class: 'quick-device-card',
+                            x_expand: true
+                        });
+                        let labels = new St.BoxLayout({
+                            vertical: true,
+                            style_class: 'quick-device-labels',
+                            x_expand: true
+                        });
+                        labels.add_child(new St.Label({
+                            text: name,
+                            style_class: 'quick-device-name',
+                            x_expand: true
+                        }));
+                        labels.add_child(new St.Label({
+                            text: device.connected ? 'Connecté' : 'Appairé',
+                            style_class: 'quick-device-status',
+                            x_expand: true
+                        }));
+                        card.add_child(labels);
+
+                        if (!device.connected) {
+                            let connectButton = new St.Button({
+                                label: 'Connecter',
+                                style_class: 'quick-device-action',
+                                reactive: true,
+                                can_focus: true
+                            });
+                            connectButton.connect('clicked', () => {
+                                connectButton.reactive = false;
+                                this._bluetoothClient.connect_service(
+                                    device.get_object_path(),
+                                    true,
+                                    null
+                                ).then(() => {
+                                    if (menunet && details.get_parent())
+                                        refreshPairedDevices();
+                                }).catch(e => {
+                                    connectButton.reactive = true;
+                                    log(`[PrismUI] Impossible de connecter ${name} : ${e.message}`);
+                                    this._notifyQuickSettingUnavailable('Appareil Bluetooth non connecté', e.message);
+                                });
+                            });
+                            card.add_child(connectButton);
+                        }
+                        deviceList.add_child(card);
+                    }
+                };
+                let client = this._bluetoothClient;
+                for (let signal of ['device-added', 'device-removed']) {
+                    deviceSignalIds.push([client, client.connect(signal, () => refreshPairedDevices())]);
+                }
+                for (let signal of ['notify::default-adapter', 'notify::default-adapter-powered']) {
+                    deviceSignalIds.push([client, client.connect(signal, () => refreshPairedDevices())]);
+                }
+                details.connect('destroy', () => {
+                    for (let [object, id] of deviceSignalIds) {
+                        try {
+                            object.disconnect(id);
+                        } catch (e) {
+                            log(`[PrismUI] Impossible de déconnecter un signal Bluetooth : ${e.message}`);
+                        }
+                    }
+                    deviceSignalIds = [];
+                });
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    refreshPairedDevices();
+                    return GLib.SOURCE_REMOVE;
+                });
+                return details;
+            });
+        };
+
+        let connectQuickToggle = (button, toggle, showDetails) => {
+            let pressStartedAt = 0;
+            button.connect('button-press-event', () => {
+                pressStartedAt = GLib.get_monotonic_time();
+                return Clutter.EVENT_PROPAGATE;
+            });
+            button.connect('clicked', () => {
+                let pressDuration = pressStartedAt
+                    ? GLib.get_monotonic_time() - pressStartedAt
+                    : 0;
+                pressStartedAt = 0;
+                if (pressDuration >= 750000) {
+                    showDetails();
                 } else {
-                    this._closeAllMenus();
-                    this._accessibilityMenu().then(m => Accesmenu = m).catch(e => log(e));
+                    toggle();
                 }
-                return GLib.SOURCE_REMOVE;
             });
-        });
+        };
+        connectQuickToggle(wifiBtn, () => this._toggleWifi(), showWifiDetails);
+        connectQuickToggle(bleBtn, () => this._toggleBluetooth(), showBluetoothDetails);
 
         controlBox.add_child(wifiBtn);
         controlBox.add_child(bleBtn);
-        controlBox.add_child(accBtn);
 
-        let volumeLabel = new St.Label({ text: "Volume", style_class: 'label' });
+        let shortcutsRow = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-shortcuts-row',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
+        });
+        let shortcutsRowWidth = menunetWidth - 30;
+        shortcutsRow.set_width(shortcutsRowWidth);
+        let shortcuts = [
+            { id: 'airplane', icon: 'airplane-mode-symbolic', title: 'Mode avion', label: 'Mode\navion' },
+            { id: 'darkTheme', icon: 'weather-clear-night-symbolic', title: 'Thème sombre', label: 'Thème\nsombre' },
+            { id: 'powerSaver', icon: 'battery-low-symbolic', title: 'Économie d’énergie', label: 'Économie\nd’énergie' },
+            { id: 'hotspot', icon: 'network-wireless-hotspot-symbolic', title: 'Point d’accès', label: 'Point\nd’accès' },
+            { id: 'nightLight', icon: 'night-light-symbolic', title: 'Éclairage nocturne', label: 'Éclairage\nnocturne' }
+        ];
+        let shortcutCellBaseWidth = Math.floor((shortcutsRowWidth - 32) / shortcuts.length);
+        let shortcutCellExtraPixels = (shortcutsRowWidth - 32) % shortcuts.length;
+        for (let [index, shortcut] of shortcuts.entries()) {
+            let shortcutCellWidth = shortcutCellBaseWidth + (index < shortcutCellExtraPixels ? 1 : 0);
+            let shortcutBox = new St.BoxLayout({
+                vertical: true,
+                style_class: 'quick-shortcut-item',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL
+            });
+            shortcutBox.set_width(shortcutCellWidth);
+            let shortcutIcon = new St.Icon({ icon_name: shortcut.icon, icon_size: 18 });
+            shortcutIcon.set_size(24, 24);
+            let shortcutButton = new St.Button({
+                style_class: 'quick-shortcut-button',
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL,
+                child: shortcutIcon
+            });
+            this._quickShortcutButtons[shortcut.id] = shortcutBox;
+            if (shortcut.id === 'hotspot') {
+                let pressStartedAt = 0;
+                shortcutButton.connect('button-press-event', () => {
+                    pressStartedAt = GLib.get_monotonic_time();
+                    return Clutter.EVENT_PROPAGATE;
+                });
+                shortcutButton.connect('clicked', () => {
+                    let pressDuration = pressStartedAt
+                        ? GLib.get_monotonic_time() - pressStartedAt
+                        : 0;
+                    pressStartedAt = 0;
+                    if (pressDuration >= 750000) {
+                        this._showHotspotDetails();
+                    } else {
+                        this._activateQuickShortcut(shortcut.id);
+                    }
+                });
+            } else {
+                shortcutButton.connect('clicked', () => this._activateQuickShortcut(shortcut.id));
+            }
+            shortcutBox.add_child(shortcutButton);
+            let shortcutLabel = new St.Label({
+                text: shortcut.label,
+                style_class: 'quick-shortcut-label',
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
+            });
+            shortcutLabel.set_width(shortcutCellWidth);
+            shortcutLabel.clutter_text.set_line_wrap(false);
+            shortcutLabel.clutter_text.set_line_alignment(Pango.Alignment.CENTER);
+            shortcutBox.add_child(shortcutLabel);
+            shortcutsRow.add_child(shortcutBox);
+        }
+        this._updateQuickShortcutStates();
+
+        let sliderGroup = new St.BoxLayout({
+            vertical: true,
+            style_class: 'quick-slider-group',
+            x_expand: true
+        });
         let volumeSlider = new Slider.Slider(0.5);
+        volumeSlider.x_expand = true;
         let volumeBox = new St.BoxLayout({ name: 'vlm-box', vertical: false, style_class: 'slider-box-vol' });
-        volumeBox.add_child(volumeLabel);
+        volumeBox.add_child(new St.Icon({ icon_name: 'audio-volume-high-symbolic', icon_size: 22, style_class: 'toggle-icon' }));
         volumeBox.add_child(volumeSlider);
 
         let stream = this._mixerControl ? this._mixerControl.get_default_sink() : null;
@@ -2521,114 +4047,102 @@ class NetworkSetting {
             }
         });
 
-        let brightLabel = new St.Label({ text: "Luminosité", style_class: 'label' });
         let brightSlider = new Slider.Slider(0);
+        brightSlider.x_expand = true;
         let brightBox = new St.BoxLayout({ name: 'brightbox', vertical: false, style_class: 'slider-box-brig' });
-        brightBox.add_child(brightLabel);
+        brightBox.add_child(new St.Icon({ icon_name: 'display-brightness-symbolic', icon_size: 22, style_class: 'toggle-icon' }));
         brightBox.add_child(brightSlider);
 
         if (_isPC) {
             brightBox.hide();
         } else {
-            Gio.DBusProxy.new_for_bus(
-                Gio.BusType.SESSION,
-                Gio.DBusProxyFlags.NONE,
-                null,
-                "org.gnome.SettingsDaemon.Power",
-                "/org/gnome/SettingsDaemon/Power",
-                "org.gnome.SettingsDaemon.Power.Screen",
-                null,
-                (source, result) => {
-                    try {
-                        let brightnessProxy = Gio.DBusProxy.new_for_bus_finish(result);
-                        
-                        if (brightnessProxy && brightnessProxy.get_name_owner() && menunet) {
-                            menunet._brightnessProxy = brightnessProxy; 
-
-                            let currentBrightness = brightnessProxy.get_cached_property("Brightness");
-                            
-                            if (currentBrightness) {
-                                let updatingFromSignal = false;
-                                brightSlider.value = currentBrightness.unpack() / 100;
-                                
-                                brightSlider.connect('notify::value', () => {
-                                    if (updatingFromSignal) return;
-                                    let val = Math.round(brightSlider.value * 100);
-                                    try {
-                                        brightnessProxy.call(
-                                            'org.freedesktop.DBus.Properties.Set',
-                                            new GLib.Variant('(ssv)', ['org.gnome.SettingsDaemon.Power.Screen', 'Brightness', new GLib.Variant('i', val)]),
-                                            null,
-                                            Gio.DBusCallFlags.NONE,
-                                            -1,
-                                            null,
-                                            null
-                                        );
-                                    } catch (e) {
-                                        log(`[PrismUI] Erreur modification luminosité : ${e.message}`);
-                                    }
-                                });
-                                
-                                menunet._brightSignalId = brightnessProxy.connect('g-properties-changed', (proxy, changed) => {
-                                    let b = changed.lookup_value('Brightness', null);
-                                    if (b) {
-                                        updatingFromSignal = true;
-                                        brightSlider.value = b.unpack() / 100;
-                                        updatingFromSignal = false;
-                                    }
-                                });
-                            }
-                        }
-                    } catch (e) {
-                        brightBox.destroy();
-                    }
-                }
-            );
+            menunet._brightnessSlider = brightSlider;
+            this._initBrightness();
+            this._connectBrightnessSlider(menunet, brightSlider);
         }
 
-        let bottomBox = new St.BoxLayout({ name: 'bottomBox', style_class: 'bottom-box', vertical: false });
-        let powerButtonsBox = new St.BoxLayout({ name: 'powerbtn', style_class: 'power-buttons-box' });
-        
-        let logoutBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-log-out-symbolic' }) });
-        let rebootBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-reboot-symbolic' }) });
-        let shutdownBtn = new St.Button({ style_class: 'bottom-btn', child: new St.Icon({ icon_name: 'system-shutdown-symbolic' }) });
+        sliderGroup.add_child(volumeBox);
+        sliderGroup.add_child(brightBox);
 
-        logoutBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('gnome-session-quit --logout'); });
-        rebootBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl reboot'); });
-        shutdownBtn.connect('clicked', () => { this._closeAllMenus(); GLib.spawn_command_line_async('systemctl poweroff'); });
+        let bottomActions = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-bottom-actions',
+            x_expand: true
+        });
+        let accessibilityContent = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-wide-button-content'
+        });
+        accessibilityContent.add_child(new St.Icon({
+            icon_name: 'preferences-desktop-accessibility-symbolic',
+            icon_size: 22
+        }));
+        accessibilityContent.add_child(new St.Label({ text: 'Accessibilité' }));
+        let accessibilityButton = new St.Button({
+            style_class: 'quick-wide-button',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL,
+            child: accessibilityContent
+        });
+        accessibilityButton.connect('clicked', () => this._showAccessibilityPage());
 
-        powerButtonsBox.add_child(logoutBtn);
-        powerButtonsBox.add_child(rebootBtn);
-        powerButtonsBox.add_child(shutdownBtn);
-
-        bottomBox.add_child(powerButtonsBox);
-        bottomBox.add_child(new St.Widget({ x_expand: true }));
-
-        if (!_isPC) {
-            let batteryBox = new St.BoxLayout({ name: 'mn-bat-box', style_class: 'menu-battery-box', vertical: false });
-            let batteryIcon = new St.Icon({ icon_size: 16, style_class: 'menu-battery-icon' });
-            let batteryLabel = new St.Label({ text: "...", style_class: 'menu-battery-label', y_align: Clutter.ActorAlign.CENTER });
-
-            if (this._upClient) {
-                let device = this._upClient.get_display_device();
-                if (device) {
-                    batteryLabel.text = `${Math.round(device.percentage)}%`;
-                    let baseName = device.percentage < 10 ? 'battery-emptywth' : (device.percentage < 35 ? 'battery-quarterwth' : (device.percentage < 60 ? 'battery-halfwth' : (device.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
-                    let file = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${device.state === UPowerGlib.DeviceState.CHARGING ? '-ch' : ''}.png`);
-                    if (file.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: file });
-                }
+        let projectorContent = new St.BoxLayout({
+            vertical: false,
+            style_class: 'quick-wide-button-content'
+        });
+        projectorContent.add_child(new St.Icon({ icon_name: 'video-display-symbolic', icon_size: 22 }));
+        projectorContent.add_child(new St.Label({ text: 'Projecter' }));
+        let projectorButton = new St.Button({
+            style_class: 'quick-wide-button',
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL,
+            child: projectorContent
+        });
+        projectorButton.connect('clicked', () => {
+            this._closeAllMenus();
+            try {
+                GLib.spawn_command_line_async('gnome-control-center display');
+            } catch (e) {
+                log(`[PrismUI] Impossible d'ouvrir les paramètres d'affichage : ${e.message}`);
             }
+        });
+        bottomActions.add_child(accessibilityButton);
+        bottomActions.add_child(projectorButton);
 
-            batteryBox.add_child(batteryLabel);
+        let batteryBox = null;
+        if (!_isPC) {
+            batteryBox = new St.BoxLayout({
+                name: 'mn-bat-box',
+                style_class: 'menu-battery-box quick-battery-box',
+                vertical: false,
+                x_expand: true
+            });
+            let batteryIcon = new St.Icon({ icon_size: 24, style_class: 'menu-battery-icon' });
+            let batteryLabel = new St.Label({
+                text: 'Batterie indisponible',
+                style_class: 'menu-battery-label',
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
+            });
+            let batteryDevice = this._upClient ? this._upClient.get_display_device() : null;
+            if (batteryDevice) {
+                let charging = batteryDevice.state === UPowerGlib.DeviceState.CHARGING;
+                batteryLabel.text = `${Math.round(batteryDevice.percentage)}%${charging ? ' - En charge' : ''}`;
+                let baseName = batteryDevice.percentage < 10 ? 'battery-emptywth' : (batteryDevice.percentage < 35 ? 'battery-quarterwth' : (batteryDevice.percentage < 60 ? 'battery-halfwth' : (batteryDevice.percentage < 85 ? 'battery3s4wth' : 'battery-fullwth')));
+                let batteryFile = Gio.File.new_for_path(`${this._iconsPath}/${baseName}${charging ? '-ch' : ''}.png`);
+                if (batteryFile.query_exists(null)) batteryIcon.gicon = new Gio.FileIcon({ file: batteryFile });
+            }
             batteryBox.add_child(batteryIcon);
-            bottomBox.add_child(batteryBox);
+            batteryBox.add_child(batteryLabel);
         }
 
-        menunet.add_child(dateBox);
-        menunet.add_child(controlBox);
-        menunet.add_child(volumeBox);
-        menunet.add_child(brightBox);
-        menunet.add_child(bottomBox);
+        this._quickSettingsHome.add_child(powerButtonsBox);
+        this._quickSettingsHome.add_child(controlBox);
+        this._quickSettingsHome.add_child(shortcutsRow);
+        this._quickSettingsHome.add_child(sliderGroup);
+        this._quickSettingsHome.add_child(bottomActions);
+        if (batteryBox) this._quickSettingsHome.add_child(batteryBox);
+        menunet.add_child(this._quickSettingsHome);
         Main.layoutManager.addChrome(menunet);
 
         let stageEventId = global.stage.connect('captured-event', (stage, event) => {
@@ -2657,8 +4171,7 @@ class NetworkSetting {
             return Clutter.EVENT_PROPAGATE;
         });
 
-        let oldDestroy = menunet.destroy.bind(menunet);
-        menunet.destroy = () => {
+        menunet.connect('destroy', destroyedActor => {
             this._mainMenuOpen = false;
             this._tooltipsLocked = false;
             if (stageEventId) {
@@ -2666,24 +4179,48 @@ class NetworkSetting {
                 stageEventId = 0;
             }
             
-            if (menunet._brightnessProxy && menunet._brightSignalId) {
-                menunet._brightnessProxy.disconnect(menunet._brightSignalId);
-                menunet._brightnessProxy = null;
+            if (this._brightnessProxy && destroyedActor._brightnessSliderSignalId) {
+                this._brightnessProxy.disconnect(destroyedActor._brightnessSliderSignalId);
+                destroyedActor._brightnessSliderSignalId = 0;
+            }
+
+            if (destroyedActor._hotspotQrPath) {
+                try {
+                    Gio.File.new_for_path(destroyedActor._hotspotQrPath).delete(null);
+                } catch (e) {
+                    log(`[PrismUI] Impossible de supprimer le QR temporaire du point d’accès : ${e.message}`);
+                }
+                destroyedActor._hotspotQrPath = null;
             }
             
-            Main.layoutManager.removeChrome(menunet);
-            oldDestroy();
-            menunet = null;
-        };
+            Main.layoutManager.removeChrome(destroyedActor);
+            if (menunet === destroyedActor)
+                menunet = null;
+            this._quickSettingsHome = null;
+            this._quickSettingsPage = null;
+            this._wifiToggleCircle = null;
+            this._bluetoothToggleCircle = null;
+            this._quickShortcutButtons = {};
+        });
 
         return menunet;
     }
 
     destroy() {
+        this._bluetoothInitialized = false;
+        this._bluetoothRfkillInitialized = false;
+        this._powerProfilesInitialized = false;
+
         if (this._initTimeout) {
             GLib.Source.remove(this._initTimeout);
             this._initTimeout = 0;
         }
+
+        if (this._wallClock && this._wallClockSignalId) {
+            this._wallClock.disconnect(this._wallClockSignalId);
+            this._wallClockSignalId = 0;
+        }
+        this._wallClock = null;
 
         for (let connection of this._signalConnections) {
             try { connection.object.disconnect(connection.id); } catch (e) {}
@@ -2714,12 +4251,29 @@ class NetworkSetting {
             this.container = null;
         }
 
+        if (this.clockContainer) {
+            this.clockContainer.destroy();
+            this.clockContainer = null;
+            this.clockLabel = null;
+        }
+
         this._mixerControl = null;
         this._audioStream = null;
         this._upClient = null;
         this._batteryProxy = null;
         this._batterySignalDevice = null;
         this._nmClient = null;
+        this._bluetoothClient = null;
+        this._bluetoothRfkillProxy = null;
+        this._wifiToggleCircle = null;
+        this._bluetoothToggleCircle = null;
+        this._quickShortcutButtons = {};
+        this._interfaceSettings = null;
+        this._nightLightSettings = null;
+        this._powerProfilesProxy = null;
+        this._brightnessProxy = null;
+        this._brightnessInitPending = false;
+        this._rfkillManager = null;
     }
 }
 
@@ -2881,6 +4435,8 @@ class HomeBar {
         this._windowSizeId = 0;
         this._windowMinId = 0;
         this._currentWindow = null;
+        this._visibilityTimeoutId = 0;
+        this._destroyed = false;
 
         this._setPosition();
         this._setupEvents();
@@ -2917,6 +4473,7 @@ class HomeBar {
     }
 
     _applyVisibility() {
+        if (!this.actor || this._destroyed) return;
         let workspace = global.workspace_manager.get_active_workspace();
         let windows = workspace.list_windows().filter(w => !w.is_skip_taskbar() && !w.minimized);
         
@@ -2930,6 +4487,7 @@ class HomeBar {
     }
 
     _showBar() {
+        if (!this.actor || this._destroyed) return;
         this.actor.show();
         this.actor.ease({
             opacity: 255,
@@ -2939,17 +4497,20 @@ class HomeBar {
     }
 
     _hideBar() {
+        if (!this.actor || this._destroyed) return;
         this.actor.ease({
             opacity: 0,
             duration: 200,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             onComplete: () => {
-                if (this.actor.opacity === 0) this.actor.hide();
+                if (this.actor && !this._destroyed && this.actor.opacity === 0)
+                    this.actor.hide();
             }
         });
     }
 
     _setPosition() {
+        if (!this.actor || this._destroyed) return;
         let monitor = Main.layoutManager.primaryMonitor;
         if (!monitor) return;
 
@@ -2993,8 +4554,8 @@ class HomeBar {
                 this._lastClickTime = now;
                 
                 this._singleClickTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-                    this._minimizeAll();
                     this._singleClickTimeoutId = 0;
+                    this._minimizeAll();
                     return GLib.SOURCE_REMOVE;
                 });
             }
@@ -3035,14 +4596,25 @@ class HomeBar {
             }
         }
         
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+        if (this._visibilityTimeoutId)
+            GLib.Source.remove(this._visibilityTimeoutId);
+        this._visibilityTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._visibilityTimeoutId = 0;
             this._applyVisibility();
             return GLib.SOURCE_REMOVE;
         });
     }
 
     destroy() {
-        if (this._singleClickTimeoutId) GLib.Source.remove(this._singleClickTimeoutId);
+        this._destroyed = true;
+        if (this._singleClickTimeoutId) {
+            GLib.Source.remove(this._singleClickTimeoutId);
+            this._singleClickTimeoutId = 0;
+        }
+        if (this._visibilityTimeoutId) {
+            GLib.Source.remove(this._visibilityTimeoutId);
+            this._visibilityTimeoutId = 0;
+        }
 
         if (this._monitorId) Main.layoutManager.disconnect(this._monitorId);
         if (this._focusId) global.display.disconnect(this._focusId);
@@ -3056,6 +4628,7 @@ class HomeBar {
         if (this.actor) {
             Main.layoutManager.removeChrome(this.actor);
             this.actor.destroy();
+            this.actor = null;
         }
     }
 }
@@ -3067,8 +4640,7 @@ function _launchOrDownloadApp(ext, appId) {
         return;
     }
 
-    let [res, out] = GLib.spawn_command_line_sync('uname -m');
-    let arch = new TextDecoder().decode(out).trim();
+    let arch = getSystemArchitecture();
 
     let fileName = appConfig.getFileName(arch, appConfig.version);
     let programDir = GLib.build_filenamev([ext.path, 'System', 'Program']);
@@ -3080,23 +4652,16 @@ function _launchOrDownloadApp(ext, appId) {
 
     let checkAndLaunch = () => {
         if (!isJavaScript) {
-            let isFuseInstalled = false;
-            try {
-                let [checkRes, checkOut] = GLib.spawn_command_line_sync('/usr/sbin/ldconfig -p');
-                let libOutput = checkRes ? new TextDecoder().decode(checkOut) : '';
-                isFuseInstalled = libOutput.includes('libfuse.so.2');
-            } catch (e) {}
-
-            if (!isFuseInstalled) {
-                let fusePaths = [
-                    '/lib/x86_64-linux-gnu/libfuse.so.2', 
-                    '/usr/lib/x86_64-linux-gnu/libfuse.so.2', 
-                    '/lib/libfuse.so.2', 
-                    '/usr/lib/libfuse.so.2',
-                    '/lib64/libfuse.so.2'
-                ];
-                isFuseInstalled = fusePaths.some(p => Gio.File.new_for_path(p).query_exists(null));
-            }
+            let arch = getSystemArchitecture();
+            let fusePaths = [
+                `/lib/${arch}-linux-gnu/libfuse.so.2`,
+                `/usr/lib/${arch}-linux-gnu/libfuse.so.2`,
+                '/lib/libfuse.so.2',
+                '/usr/lib/libfuse.so.2',
+                '/lib64/libfuse.so.2',
+                '/usr/lib64/libfuse.so.2'
+            ];
+            let isFuseInstalled = fusePaths.some(path => Gio.File.new_for_path(path).query_exists(null));
 
             if (!isFuseInstalled) {
                 let dialog = new ModalDialog.ModalDialog({ destroyOnClose: true });
@@ -3217,8 +4782,7 @@ function _registerPrismApps(ext) {
     let extDir = ext.path;
     let programDir = GLib.build_filenamev([extDir, 'System', 'Program']);
     
-    let [res, out] = GLib.spawn_command_line_sync('uname -m');
-    let arch = new TextDecoder().decode(out).trim();
+    let arch = getSystemArchitecture();
 
     GLib.mkdir_with_parents(appsDir, 0o755);
     GLib.mkdir_with_parents(programDir, 0o755);
@@ -3320,7 +4884,14 @@ export default class PrismExtension extends Extension {
         let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
         let wallpaperPath = this.dir.get_child('icons').get_child('interface').get_child('wallpaper').get_child('officiel-wallpaper-prismUI.png').get_path();
         let wallpaperUri = GLib.filename_to_uri(wallpaperPath, null);
+        this._wallpaperSettings = backgroundSettings;
         this._originalWallpaperUri = backgroundSettings.get_string('picture-uri');
+        this._appliedWallpaperUri = wallpaperUri;
+        this._supportsDarkWallpaper = backgroundSettings.settings_schema.has_key('picture-uri-dark');
+        if (this._supportsDarkWallpaper) {
+            this._originalDarkWallpaperUri = backgroundSettings.get_string('picture-uri-dark');
+            backgroundSettings.set_string('picture-uri-dark', wallpaperUri);
+        }
         backgroundSettings.set_string('picture-uri', wallpaperUri);
         Main.panel.hide();
 
@@ -3331,6 +4902,20 @@ export default class PrismExtension extends Extension {
     }
 
     disable() {
+        if (this._wallpaperSettings && this._originalWallpaperUri !== undefined &&
+            this._wallpaperSettings.get_string('picture-uri') === this._appliedWallpaperUri) {
+            this._wallpaperSettings.set_string('picture-uri', this._originalWallpaperUri);
+        }
+        if (this._wallpaperSettings && this._supportsDarkWallpaper &&
+            this._wallpaperSettings.get_string('picture-uri-dark') === this._appliedWallpaperUri) {
+            this._wallpaperSettings.set_string('picture-uri-dark', this._originalDarkWallpaperUri);
+        }
+        this._wallpaperSettings = null;
+        this._originalWallpaperUri = null;
+        this._originalDarkWallpaperUri = null;
+        this._appliedWallpaperUri = null;
+        this._supportsDarkWallpaper = false;
+
         if (this._theme && this._stylesheet) {
             this._theme.unload_stylesheet(this._stylesheet);
             this._theme = null;

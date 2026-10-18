@@ -19,7 +19,7 @@ const BUILTIN_WIDGETS = [
             type: 'box',
             vertical: true,
             style_class: 'prism-widget-box',
-            style: 'padding: 12px; justify-content: center;',
+            style: 'padding: 12px;',
             children: [
                 { type: 'label', id: 'cal-header', text: 'Mois', style: 'font-size: 16px; font-weight: bold; color: white; margin-bottom: 15px; text-align: center;' },
                 { type: 'label', id: 'cal-grid', text: 'Calcul...', style: 'font-family: monospace; font-size: 14px; color: #dfe7ff; text-align: center; line-height: 1.6;' }
@@ -229,18 +229,18 @@ const BUILTIN_WIDGETS = [
                     let idle = parts[3] + parts[4];
                     let total = parts.reduce((a, b) => a + b, 0);
                     
-                    // Si c'est le premier passage, on initialise la mémoire
-                    if (!globalThis.prevCpuTotal) {
-                        globalThis.prevCpuIdle = idle; globalThis.prevCpuTotal = total;
+                    if (state.prevTotal === undefined) {
+                        state.prevIdle = idle;
+                        state.prevTotal = total;
                         return 'CPU : Calcul...';
                     }
                     
-                    let totalDiff = total - globalThis.prevCpuTotal;
-                    let idleDiff = idle - globalThis.prevCpuIdle;
-                    let cpuUsage = (totalDiff - idleDiff) / totalDiff;
-                    
-                    // On sauvegarde pour le prochain tour
-                    globalThis.prevCpuIdle = idle; globalThis.prevCpuTotal = total;
+                    let totalDiff = total - state.prevTotal;
+                    let idleDiff = idle - state.prevIdle;
+                    let cpuUsage = totalDiff > 0 ? (totalDiff - idleDiff) / totalDiff : 0;
+
+                    state.prevIdle = idle;
+                    state.prevTotal = total;
                     
                     return 'CPU : ' + Math.round(cpuUsage * 100) + '%';
                 `
@@ -253,14 +253,18 @@ const BUILTIN_WIDGETS = [
                     let idle = parts[3] + parts[4];
                     let total = parts.reduce((a, b) => a + b, 0);
                     
-                    if (!globalThis.prevCpuTotalBar) {
-                        globalThis.prevCpuIdleBar = idle; globalThis.prevCpuTotalBar = total;
+                    if (state.prevTotal === undefined) {
+                        state.prevIdle = idle;
+                        state.prevTotal = total;
                         return 'width: 0px; height: 6px; background-color: #ff8800; border-radius: 3px;';
                     }
                     
-                    let cpuUsage = 1 - ((idle - globalThis.prevCpuIdleBar) / (total - globalThis.prevCpuTotalBar));
-                    
-                    globalThis.prevCpuIdleBar = idle; globalThis.prevCpuTotalBar = total;
+                    let totalDiff = total - state.prevTotal;
+                    let idleDiff = idle - state.prevIdle;
+                    let cpuUsage = totalDiff > 0 ? (totalDiff - idleDiff) / totalDiff : 0;
+
+                    state.prevIdle = idle;
+                    state.prevTotal = total;
                     
                     return 'width: ' + Math.round(cpuUsage * 150) + 'px; height: 6px; background-color: #ff8800; border-radius: 3px;';
                 `
@@ -787,10 +791,18 @@ export class PrismWidgets {
         };
 
         if (manifest.bindings) {
-            for (let bind of manifest.bindings) {
+            for (let binding of manifest.bindings) {
+                let bind = { ...binding, _state: {} };
                 if (bind.sourceType === 'shortcut') {
                     setupShortcutBinding();
                     continue;
+                }
+
+                bind._processor = bind.sourceType === 'js'
+                    ? new Function('state', bind.process)
+                    : new Function('data', 'state', bind.process);
+                if (bind.sourceType === 'file') {
+                    bind._file = Gio.File.new_for_path(bind.source);
                 }
 
                 const updateData = () => {
@@ -798,14 +810,20 @@ export class PrismWidgets {
                         return GLib.SOURCE_REMOVE;
                     }
 
-                    try {
-                        if (bind.sourceType === 'file') {
-                            let [ok, contents] = GLib.file_get_contents(bind.source);
-                            if (ok) {
-                                let rawData = new TextDecoder("utf-8").decode(contents).trim();
+                    if (bind.sourceType === 'file') {
+                        if (bind._reading) return GLib.SOURCE_CONTINUE;
+                        bind._reading = true;
+                        bind._file.load_contents_async(null, (file, result) => {
+                            bind._reading = false;
+                            if (!box || (box.is_destroyed && box.is_destroyed())) return;
+                            try {
+                                let [ok, contents] = file.load_contents_finish(result);
+                                if (!ok) {
+                                    throw new Error('Le fichier n’a pas pu être lu.');
+                                }
+                                let rawData = new TextDecoder('utf-8').decode(contents).trim();
                                 if (rawData) {
-                                    let processor = new Function('data', bind.process);
-                                    let finalValue = processor(rawData);
+                                    let finalValue = bind._processor(rawData, bind._state);
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                         else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
@@ -813,12 +831,16 @@ export class PrismWidgets {
                                         else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
                                     }
                                 }
+                            } catch (e) {
+                                log(`[PrismUI] Lecture impossible pour le widget ${bind.targetId} (${bind.source}) : ${e.message}`);
                             }
-                        }
+                        });
+                        return GLib.SOURCE_CONTINUE;
+                    }
 
-                        else if (bind.sourceType === 'js') {
-                            let processor = new Function(bind.process);
-                            let finalValue = processor();
+                    try {
+                        if (bind.sourceType === 'js') {
+                            let finalValue = bind._processor(bind._state);
                             if (refs[bind.targetId]) {
                                 if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                 else if (bind.targetProp === 'style') refs[bind.targetId].set_style(finalValue);
@@ -838,8 +860,7 @@ export class PrismWidgets {
                                     if (!box || !box.get_parent()) return;
                                     let [ok, stdout, stderr] = obj.communicate_utf8_finish(res);
                                     let rawData = stdout ? stdout.trim() : "";
-                                    let processor = new Function('data', bind.process);
-                                    let finalValue = processor(rawData);
+                                    let finalValue = bind._processor(rawData, bind._state);
 
                                     if (refs[bind.targetId]) {
                                         if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
@@ -863,8 +884,7 @@ export class PrismWidgets {
                                 const applyData = (rawData) => {
                                     if (!box || box.is_destroyed && box.is_destroyed()) return;
                                     if (rawData) {
-                                        let processor = new Function('data', bind.process);
-                                        let finalValue = processor(rawData.toString().trim());
+                                        let finalValue = bind._processor(rawData.toString().trim(), bind._state);
                                         if (refs[bind.targetId]) {
                                             if (bind.targetProp === 'text') refs[bind.targetId].set_text(finalValue);
                                             else if (bind.targetProp === 'markup') refs[bind.targetId].get_clutter_text().set_markup(finalValue);

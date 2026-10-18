@@ -18,6 +18,7 @@ export class WindowManager {
         this._grabBeginId = 0;
         this._grabEndId = 0;
         this._trackTimerId = 0;
+        this._snapGeometryTimeoutId = 0;
         this._draggedWindow = null;
         this._activeTarget = null;
 
@@ -131,12 +132,48 @@ export class WindowManager {
 
     _showSnapUI() {
         let monitor = Main.layoutManager.primaryMonitor;
-        this.snapContainer.set_position((monitor.width - this.snapContainer.width) / 2, monitor.y);
+        if (this._snapGeometryTimeoutId) {
+            GLib.Source.remove(this._snapGeometryTimeoutId);
+            this._snapGeometryTimeoutId = 0;
+        }
+        this.snapContainer.set_position(monitor.x + (monitor.width - this.snapContainer.width) / 2, monitor.y);
         this.snapContainer.show();
+        this._snapRects = null;
+        this._snapGeometryTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            this._snapGeometryTimeoutId = 0;
+            if (!this.snapContainer.visible) return GLib.SOURCE_REMOVE;
+
+            this._snapRects = new Map();
+            for (let target of this.dropTargets) {
+                let cached = this._snapRects.get(target.card);
+                let cardRect = cached?.card;
+                if (!cardRect) {
+                    let [x, y] = target.card.get_transformed_position();
+                    let [width, height] = target.card.get_transformed_size();
+                    cardRect = { x, y, width, height };
+                }
+
+                let [x, y] = target.widget.get_transformed_position();
+                let [width, height] = target.widget.get_transformed_size();
+                this._snapRects.set(target.card, {
+                    card: cardRect,
+                    targets: [
+                        ...(cached?.targets || []),
+                        { target, rect: { x, y, width, height } }
+                    ]
+                });
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _hideSnapUI() {
         this.snapContainer.hide();
+        if (this._snapGeometryTimeoutId) {
+            GLib.Source.remove(this._snapGeometryTimeoutId);
+            this._snapGeometryTimeoutId = 0;
+        }
+        this._snapRects = null;
         this._resetAllTargets();
     }
 
@@ -155,27 +192,26 @@ export class WindowManager {
             let newActiveTarget = null;
 
             for (let target of this.dropTargets) {
-                let [cx, cy] = target.card.get_transformed_position();
-                let [cw, ch] = target.card.get_transformed_size();
+                let cached = this._snapRects?.get(target.card);
+                if (!cached) continue;
+                let { x: cx, y: cy, width: cw, height: ch } = cached.card;
 
                 if (mouseX >= cx && mouseX <= cx + cw && mouseY >= cy && mouseY <= cy + ch) {
-                    let siblingTargets = this.dropTargets.filter(t => t.card === target.card);
+                    let siblingTargets = cached.targets;
                     
                     if (siblingTargets.length === 1) {
-                        newActiveTarget = siblingTargets[0];
+                        newActiveTarget = siblingTargets[0].target;
                     } else {
                         let closest = null;
                         let minDst = Infinity;
-                        for (let st of siblingTargets) {
-                            let [tx, ty] = st.widget.get_transformed_position();
-                            let [tw, th] = st.widget.get_transformed_size();
-                            let midX = tx + tw / 2;
-                            let midY = ty + th / 2;
+                        for (let { target: sibling, rect } of siblingTargets) {
+                            let midX = rect.x + rect.width / 2;
+                            let midY = rect.y + rect.height / 2;
                             let dst = Math.pow(mouseX - midX, 2) + Math.pow(mouseY - midY, 2);
                             
                             if (dst < minDst) {
                                 minDst = dst;
-                                closest = st;
+                                closest = sibling;
                             }
                         }
                         newActiveTarget = closest;
@@ -263,6 +299,10 @@ export class WindowManager {
 
     destroy() {
         this._stopTrackingMouse();
+        if (this._snapGeometryTimeoutId) {
+            GLib.Source.remove(this._snapGeometryTimeoutId);
+            this._snapGeometryTimeoutId = 0;
+        }
         if (this._grabBeginId) this._display.disconnect(this._grabBeginId);
         if (this._grabEndId) this._display.disconnect(this._grabEndId);
         if (this.snapContainer) {

@@ -7,7 +7,7 @@
   "permissions": ["org.gnome.shell"],
   "settings-schema": "org.gnome.shell.extensions.pdock",
   "version": 1.40,
-  "sub-version": "K009",
+  "sub-version": "K010",
   "title-version": "Wayland Edition",
   "files": [
     "desktopWidgets.js",
