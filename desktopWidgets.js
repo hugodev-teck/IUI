@@ -370,7 +370,7 @@ const BUILTIN_WIDGETS = [
                         let d1 = 'Auj. : ' + j.weather[0].mintempC + '° / ' + j.weather[0].maxtempC + '°';
                         let d2 = 'Dem. : ' + j.weather[1].mintempC + '° / ' + j.weather[1].maxtempC + '°';
                         
-                        return d1 + '\n' + d2;
+                        return d1 + '\\n' + d2;
                     } catch(e) {
                         return 'Erreur JSON';
                     }
@@ -586,17 +586,25 @@ export class PrismWidgets {
             if (ok) {
                 let layout = JSON.parse(new TextDecoder("utf-8").decode(contents));
                 for (let item of layout) {
-                    let manifest = BUILTIN_WIDGETS.find(w => w.id === item.type);
-                    if (manifest) {
-                        let newWidget = this._buildWidgetFromManifest(manifest, item.appId);
-                        newWidget.set_position(item.x, item.y);
-                        this.desktopContainer.add_child(newWidget);
-                        this._widgets.push(newWidget);
-                        this._makeWidgetInteractive(newWidget);
+                    try {
+                        let manifest = BUILTIN_WIDGETS.find(w => w.id === item.type);
+                        if (manifest) {
+                            let newWidget = this._buildWidgetFromManifest(manifest, item.appId);
+                            if (newWidget) {
+                                newWidget.set_position(item.x, item.y);
+                                this.desktopContainer.add_child(newWidget);
+                                this._widgets.push(newWidget);
+                                this._makeWidgetInteractive(newWidget);
+                            }
+                        }
+                    } catch (err) {
+                        log(`[PrismUI] Erreur au chargement du widget ${item.type} : ${err.message}`);
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) {
+            log(`[PrismUI] Erreur globale _loadLayout : ${e.message}`);
+        }
     }
 
     _setupLongPress() {
@@ -801,9 +809,6 @@ export class PrismWidgets {
                 bind._processor = bind.sourceType === 'js'
                     ? new Function('state', bind.process)
                     : new Function('data', 'state', bind.process);
-                if (bind.sourceType === 'file') {
-                    bind._file = Gio.File.new_for_path(bind.source);
-                }
 
                 const updateData = () => {
                     if (!box || (box.is_destroyed && box.is_destroyed())) {
@@ -811,17 +816,10 @@ export class PrismWidgets {
                     }
 
                     if (bind.sourceType === 'file') {
-                        if (bind._reading) return GLib.SOURCE_CONTINUE;
-                        bind._reading = true;
-                        bind._file.load_contents_async(null, (file, result) => {
-                            bind._reading = false;
-                            if (!box || (box.is_destroyed && box.is_destroyed())) return;
-                            try {
-                                let [ok, contents] = file.load_contents_finish(result);
-                                if (!ok) {
-                                    throw new Error('Le fichier n’a pas pu être lu.');
-                                }
-                                let rawData = new TextDecoder('utf-8').decode(contents).trim();
+                        try {
+                            let [ok, contents] = GLib.file_get_contents(bind.source);
+                            if (ok) {
+                                let rawData = new TextDecoder("utf-8").decode(contents).trim();
                                 if (rawData) {
                                     let finalValue = bind._processor(rawData, bind._state);
                                     if (refs[bind.targetId]) {
@@ -831,10 +829,10 @@ export class PrismWidgets {
                                         else if (bind.targetProp === 'rotation') refs[bind.targetId].set_rotation_angle(Clutter.RotateAxis.Z_AXIS, finalValue);
                                     }
                                 }
-                            } catch (e) {
-                                log(`[PrismUI] Lecture impossible pour le widget ${bind.targetId} (${bind.source}) : ${e.message}`);
                             }
-                        });
+                        } catch (e) {
+                            log(`[PrismUI] Erreur lecture fichier locale ${bind.source} : ${e.message}`);
+                        }
                         return GLib.SOURCE_CONTINUE;
                     }
 
@@ -878,7 +876,6 @@ export class PrismWidgets {
 
                         else if (bind.sourceType === 'http') {
                             try {
-                                // On utilise la session globale au lieu d'en recréer une
                                 let message = Soup.Message.new('GET', bind.source);
 
                                 const applyData = (rawData) => {
@@ -941,23 +938,21 @@ export class PrismWidgets {
         let wWidth = (manifest.gridW || 4) * GRID_SIZE;
         let wHeight = (manifest.gridH || 3) * GRID_SIZE;
         let ghostX = 0, ghostY = 0;
-        let isColliding = false; // Nouvelle variable pour mémoriser l'état de collision
+        let isColliding = false;
 
         const updateGhostPosition = (x, y) => {
             ghostX = this._snap(x - (wWidth / 2)); 
             ghostY = this._snap(y - (wHeight / 2));
             
-            // On vérifie en temps réel si la position accrochée superpose un autre widget
             isColliding = this._checkCollision(ghostX, ghostY, wWidth, wHeight);
             
             if (dragActor) { 
                 dragActor.set_position(ghostX, ghostY);
                 
-                // Retour visuel : on passe la boîte en rouge si l'emplacement est occupé
                 if (isColliding) {
                     dragActor.set_style('background-color: rgba(255, 50, 50, 0.4); border: 2px solid #ff3333; border-radius: 16px;');
                 } else {
-                    dragActor.set_style(''); // Restaure le style CSS par défaut
+                    dragActor.set_style(''); 
                 }
             }
         };
@@ -1015,7 +1010,6 @@ export class PrismWidgets {
 
             if (dragActor) { dragActor.destroy(); dragActor = null; }
             
-            // Si l'emplacement final est en collision, on refuse l'action et on annule
             if (isColliding) {
                 Main.osdWindowManager.show(0, Gio.icon_new_for_string('dialog-error-symbolic'), "Emplacement occupé", null);
                 return; 
@@ -1361,7 +1355,6 @@ export class PrismWidgets {
             this._saveLayout();
         };
 
-        // Remplacement par le signal natif 'clicked' 
         deleteBtn.connect('clicked', () => closeAction());
         
         if (editBtn) {
