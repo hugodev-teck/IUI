@@ -9,6 +9,7 @@ import St from 'gi://St';
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import Shell from 'gi://Shell';
+import Meta from 'gi://Meta';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -22,6 +23,17 @@ export class ClipboardManager {
         this.menuBox = null;
         this.isOpen = false;
         this.clickBinder = null;
+
+        // Branchement direct sur le gestionnaire de sélection de Mutter (Zéro polling)
+        this._selection = global.display.get_selection();
+        this._selectionId = this._selection.connect('owner-changed', (selection, type) => {
+            if (type === Meta.SelectionType.SELECTION_CLIPBOARD) {
+                this._checkClipboard();
+            }
+        });
+        
+        // Capturer le contenu actuel au démarrage
+        this._checkClipboard();
     }
 
     _checkClipboard() {
@@ -107,7 +119,6 @@ export class ClipboardManager {
         this.menuBox.set_size(menuWidth, menuHeight);
         
         this.isOpen = true;
-        this._checkClipboard();
 
         this.clickBinder = global.stage.connect('captured-event', (stage, event) => {
             let type = event.type();
@@ -194,6 +205,10 @@ export class ClipboardManager {
     }
 
     destroy() {
+        if (this._selectionId && this._selection) {
+            this._selection.disconnect(this._selectionId);
+            this._selectionId = 0;
+        }
         this.closeMenu();
     }
 };
