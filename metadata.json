@@ -7,10 +7,11 @@
   "permissions": ["org.gnome.shell"],
   "settings-schema": "org.gnome.shell.extensions.pdock",
   "version": 1.40,
-  "sub-version": "K012",
+  "sub-version": "K013",
   "title-version": "Wayland Edition",
   "files": [
     "desktopWidgets.js",
+    "networksetting.js",
     "intelligentsearchbar.js",
     "notificationsys.js",
     "stylesheet.css",
