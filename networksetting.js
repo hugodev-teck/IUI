@@ -65,6 +65,7 @@ export class NetworkSetting {
         this._brightnessInitPending = false;
         this._rfkillManager = null;
         this._initTimeout = 0;
+        this._powerSaverActive = false;
         this._iconsPath = `${this._ext.path}/icons/interface/wthicon`;
 
         this.container = new St.BoxLayout({
@@ -625,17 +626,19 @@ export class NetworkSetting {
     }
 
     _updateQuickShortcutStates() {
+        let activeProfileProp = this._powerProfilesProxy 
+            ? this._powerProfilesProxy.get_cached_property('ActiveProfile') 
+            : null;
+        let currentProfile = activeProfileProp ? activeProfileProp.get_string() : '';
+
         let states = {
             airplane: !!(this._rfkillManager && this._rfkillManager.airplane_mode),
             darkTheme: !!(
                 this._interfaceSettings &&
                 this._interfaceSettings.get_string('color-scheme') === 'prefer-dark'
             ),
-            powerSaver: !!(
-                this._powerProfilesProxy &&
-                this._powerProfilesProxy.get_cached_property('ActiveProfile') &&
-                this._powerProfilesProxy.get_cached_property('ActiveProfile').get_string() === 'power-saver'
-            ),
+
+            powerSaver: this._powerSaverActive,
             hotspot: this._isHotspotActive(),
             nightLight: !!(
                 this._nightLightSettings &&
@@ -644,10 +647,12 @@ export class NetworkSetting {
         };
 
         for (let [name, button] of Object.entries(this._quickShortcutButtons)) {
-            if (states[name]) {
-                button.add_style_class_name('active');
-            } else {
-                button.remove_style_class_name('active');
+            if (button && typeof button.has_style_class_name === 'function') {
+                if (states[name]) {
+                    button.add_style_class_name('active');
+                } else {
+                    button.remove_style_class_name('active');
+                }
             }
         }
     }
@@ -671,14 +676,7 @@ export class NetworkSetting {
     }
 
     _togglePowerSaver() {
-        let activeProfile = this._powerProfilesProxy
-            ? this._powerProfilesProxy.get_cached_property('ActiveProfile')
-            : null;
-        if (!this._powerProfilesProxy || !this._powerProfilesProxy.get_name_owner() || !activeProfile) {
-            log('[PrismUI] Impossible de changer le profil : service des profils d’énergie indisponible.');
-            this._powerProfilesProxy = null;
-            this._powerProfilesInitialized = false;
-            this._initPowerProfiles();
+        if (!this._powerProfilesProxy || !this._powerProfilesProxy.get_name_owner()) {
             this._notifyQuickSettingUnavailable(
                 'Économie d’énergie indisponible',
                 'Le service des profils d’énergie n’est pas prêt ou ne répond pas.'
@@ -686,7 +684,21 @@ export class NetworkSetting {
             return;
         }
 
-        let profile = activeProfile.get_string() === 'power-saver' ? 'balanced' : 'power-saver';
+        // On inverse notre état local à chaque clic
+        this._powerSaverActive = !this._powerSaverActive;
+        let newProfile = this._powerSaverActive ? 'power-saver' : 'balanced';
+
+        // Forçage visuel immédiat et définitif de la tuile
+        let shortcutBox = this._quickShortcutButtons['powerSaver'];
+        if (shortcutBox && typeof shortcutBox.has_style_class_name === 'function') {
+            if (this._powerSaverActive) {
+                shortcutBox.add_style_class_name('active');
+            } else {
+                shortcutBox.remove_style_class_name('active');
+            }
+        }
+
+        // Envoi de l'ordre au système en arrière-plan
         this._powerProfilesProxy.get_connection().call(
             'org.freedesktop.UPower.PowerProfiles',
             '/org/freedesktop/UPower/PowerProfiles',
@@ -695,7 +707,7 @@ export class NetworkSetting {
             new GLib.Variant('(ssv)', [
                 'org.freedesktop.UPower.PowerProfiles',
                 'ActiveProfile',
-                new GLib.Variant('s', profile)
+                new GLib.Variant('s', newProfile)
             ]),
             null,
             Gio.DBusCallFlags.NONE,
@@ -704,10 +716,8 @@ export class NetworkSetting {
             (connection, result) => {
                 try {
                     connection.call_finish(result);
-                    this._updateQuickShortcutStates();
                 } catch (e) {
-                    log(`[PrismUI] Impossible de changer le profil d’énergie : ${e.message}`);
-                    this._notifyQuickSettingUnavailable('Profil d’énergie non modifié', e.message);
+                    log(`[PrismUI] Erreur powerSaver : ${e.message}`);
                 }
             }
         );
@@ -1298,6 +1308,16 @@ export class NetworkSetting {
     }
 
     _activateQuickShortcut(name) {
+        // Retour visuel immédiat (toggle de la classe active au clic)
+        let shortcutBox = this._quickShortcutButtons[name];
+        if (shortcutBox) {
+            if (shortcutBox.has_style_class_name('active')) {
+                shortcutBox.remove_style_class_name('active');
+            } else {
+                shortcutBox.add_style_class_name('active');
+            }
+        }
+
         switch (name) {
         case 'airplane':
             this._setAirplaneMode(!(
@@ -1328,16 +1348,30 @@ export class NetworkSetting {
                 this._notifyQuickSettingUnavailable('Éclairage nocturne indisponible', 'Le réglage GNOME de l’éclairage nocturne n’est pas disponible.');
                 return;
             }
-            let nightLightChanged = this._nightLightSettings.set_boolean(
-                'night-light-enabled',
-                !this._nightLightSettings.get_boolean('night-light-enabled')
-            );
-            if (!nightLightChanged) {
-                this._notifyQuickSettingUnavailable('Éclairage nocturne non modifié', 'GNOME n’a pas accepté le changement de réglage.');
+            let currentState = this._nightLightSettings.get_boolean('night-light-enabled');
+            let newState = !currentState;
+            
+            // Application de la nouvelle valeur
+            this._nightLightSettings.set_boolean('night-light-enabled', newState);
+            
+            // Vérification immédiate et forçage visuel de la tuile
+            let verifiedState = this._nightLightSettings.get_boolean('night-light-enabled');
+            let shortcutBox = this._quickShortcutButtons['nightLight'];
+            
+            if (shortcutBox) {
+                if (verifiedState) {
+                    shortcutBox.add_style_class_name('active');
+                } else {
+                    shortcutBox.remove_style_class_name('active');
+                }
             }
             break;
         }
-        this._updateQuickShortcutStates();
+        // Synchronisation ultérieure avec l'état réel du système
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+            this._updateQuickShortcutStates();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _setQuickToggleState(circle, enabled) {
