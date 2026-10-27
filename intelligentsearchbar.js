@@ -10,6 +10,7 @@ import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Pango from 'gi://Pango';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -64,9 +65,7 @@ var LocalSearchEngine = class {
             let activeScans = 0;
             
             const processNext = () => {
-                // --- AJOUT : Si l'ID a changé, on coupe immédiatement l'exploration ---
                 if (this._searchId !== currentId) return resolve();
-                
                 if (stack.length === 0 && activeScans === 0) return resolve();
                 
                 let launchedScan = false;
@@ -85,7 +84,6 @@ var LocalSearchEngine = class {
                         null,
                         (dir, res) => {
                             activeScans--;
-                            // --- AJOUT : Coupe aussi à la réception du callback ---
                             if (this._searchId !== currentId) return resolve();
                             
                             try {
@@ -136,45 +134,42 @@ var LocalSearchEngine = class {
         });
     }
 
-    search(query) {
-        this._searchId++; // Nouveau jeton pour cette recherche
+    search(query, allAppsCache) {
+        this._searchId++;
         let currentId = this._searchId;
 
         if (!query || query.trim().length < 2) return Promise.resolve([]);
         let lowerQuery = query.toLowerCase();
         let localResults = []; 
 
-        Gio.AppInfo.get_all().forEach(app => {
-            if (app.should_show()) {
-                let name = app.get_name();
-                if (!name) return;
+        allAppsCache.forEach(app => {
+            let name = app.get_name();
+            if (!name) return;
+            
+            let score = this._calculateScore(lowerQuery, name);
+            if (name.toLowerCase().includes(lowerQuery) || score > 0.5) {
                 
-                let score = this._calculateScore(lowerQuery, name);
-                if (name.toLowerCase().includes(lowerQuery) || score > 0.5) {
-                    
-                    let categories = app.get_categories() || "";
-                    let appId = app.get_id() || "";
-                    let isSetting = categories.toLowerCase().includes('settings') || appId.toLowerCase().includes('settings');
+                let categories = app.get_categories() || "";
+                let appId = app.get_id() || "";
+                let isSetting = categories.toLowerCase().includes('settings') || appId.toLowerCase().includes('settings');
 
-                    localResults.push({
-                        type: isSetting ? SEARCH_TYPE.SETTING : SEARCH_TYPE.APP,
-                        name: name,
-                        icon: app.get_icon() || Gio.icon_new_for_string('application-x-executable'),
-                        appInfo: app,
-                        score: score + 0.5
-                    });
-                }
+                localResults.push({
+                    type: isSetting ? SEARCH_TYPE.SETTING : SEARCH_TYPE.APP,
+                    name: name,
+                    icon: app.get_icon() || Gio.icon_new_for_string('application-x-executable'),
+                    appInfo: app,
+                    score: score + 0.5
+                });
             }
         });
 
         const homeDirs = ['Documents', 'Bureau', 'Downloads', 'Téléchargements'];
         let fileSearchPromises = homeDirs.map(folder => 
-            // On passe le currentId à la fonction récursive
             this._searchDirectoryRecursively(Gio.File.new_for_path(`${GLib.get_home_dir()}/${folder}`), lowerQuery, localResults, currentId)
         );
         
         return Promise.all(fileSearchPromises).then(() => {
-            if (this._searchId !== currentId) return []; // Annule le rendu si obsolète
+            if (this._searchId !== currentId) return [];
             
             localResults.push({
                 type: SEARCH_TYPE.WEB,
@@ -202,17 +197,29 @@ export const AppLauncher = GObject.registerClass(
             this._currentPage = 0;
             this._appsPerPage = 24; 
             this._allApps = [];
+            this._selectedIndex = -1;
+            this._resultButtons = [];
+            this._gridBuilt = false; // Évite de reconstruire la grille si déjà affichée
+
+            // Cache dynamique des applications
+            this._appMonitor = Gio.AppInfoMonitor.get();
+            this._appMonitorId = this._appMonitor.connect('changed', () => {
+                this._loadAppsCache();
+                this._gridBuilt = false;
+                if (this._overlayBox && this._overlayBox.visible && this.searchEntry.get_text().length === 0) {
+                    this._showAppGrid(true);
+                }
+            });
+            this._loadAppsCache();
         }
 
-        toggle() {
-            if (this._overlayBox) {
-                this.hide();
-            } else {
-                this.show();
-            }
+        _loadAppsCache() {
+            this._allApps = Gio.AppInfo.get_all()
+                .filter(a => a.should_show())
+                .sort((a, b) => a.get_display_name().localeCompare(b.get_display_name()));
         }
 
-        show() {
+        _buildUI() {
             if (this._overlayBox) return;
 
             let monitor = Main.layoutManager.primaryMonitor;
@@ -224,7 +231,8 @@ export const AppLauncher = GObject.registerClass(
                 height: monitor.height,
                 x: monitor.x,
                 y: monitor.y,
-                layout_manager: new Clutter.BinLayout()
+                layout_manager: new Clutter.BinLayout(),
+                visible: false
             });
 
             this.bgClicker = new St.Button({
@@ -233,7 +241,7 @@ export const AppLauncher = GObject.registerClass(
                 y_expand: true,
                 style: 'background-color: transparent;'
             });
-            this.bgClicker.connect('clicked', () => this.hide());
+            this._bgClickId = this.bgClicker.connect('clicked', () => this.hide());
             this._overlayBox.add_child(this.bgClicker);
 
             let panelWidth = 900;
@@ -264,12 +272,25 @@ export const AppLauncher = GObject.registerClass(
             this.searchEntry = new St.Entry({ 
                 hint_text: "Rechercher une application, un fichier...", 
                 style_class: 'prism-launcher-entry', 
-                can_focus: true
+                can_focus: true,
+                x_expand: true
             });
-            this.searchEntry.set_width(800);
+            this.searchEntry.set_width(750);
             
+            this.btnClear = new St.Button({
+                child: new St.Icon({ gicon: Gio.icon_new_for_string('edit-clear-symbolic'), icon_size: 20 }),
+                style_class: 'prism-launcher-clear-btn',
+                reactive: true,
+                opacity: 0
+            });
+            this.btnClear.connect('clicked', () => {
+                this.searchEntry.set_text('');
+                this.searchEntry.clutter_text.grab_key_focus();
+            });
+
             searchBox.add_child(searchIcon);
             searchBox.add_child(this.searchEntry);
+            searchBox.add_child(this.btnClear);
             contentLayout.add_child(searchBox);
 
             this.filterBox = new St.BoxLayout({name: 'src-filter', style_class: 'prism-launcher-filters', vertical: false });
@@ -307,69 +328,143 @@ export const AppLauncher = GObject.registerClass(
 
             this.navBar = new St.BoxLayout({name: 'prism-launcher-navbar', style_class: 'prism-launcher-navbar', vertical: false, x_align: Clutter.ActorAlign.CENTER });
             
-            this.btnPrev = new St.Button({ label: '◀ Précédent', style_class: 'prism-nav-btn', reactive: true });
+            this.btnPrev = new St.Button({ child: new St.Icon({ icon_name: 'go-previous-symbolic', icon_size: 16 }), style_class: 'prism-nav-btn', reactive: true });
             this.btnPrev.connect('clicked', () => {
                 if (this._currentPage > 0) {
                     this._currentPage--;
-                    this._showAppGrid();
+                    this._showAppGrid(true);
                 }
             });
 
-            this.btnClose = new St.Button({ label: '✖ Fermer', style_class: 'prism-nav-btn close-btn', reactive: true });
-            this.btnClose.connect('clicked', () => this.hide());
+            this.pageIndicators = new St.BoxLayout({ vertical: false, style_class: 'prism-nav-dots', y_align: Clutter.ActorAlign.CENTER });
 
-            this.btnNext = new St.Button({ label: 'Suivant ▶', style_class: 'prism-nav-btn', reactive: true });
+            this.btnNext = new St.Button({ child: new St.Icon({ icon_name: 'go-next-symbolic', icon_size: 16 }), style_class: 'prism-nav-btn', reactive: true });
             this.btnNext.connect('clicked', () => {
                 let maxPage = Math.ceil(this._allApps.length / this._appsPerPage) - 1;
                 if (this._currentPage < maxPage) {
                     this._currentPage++;
-                    this._showAppGrid();
+                    this._showAppGrid(true);
                 }
             });
 
             this.navBar.add_child(this.btnPrev);
-            this.navBar.add_child(this.btnClose);
+            this.navBar.add_child(this.pageIndicators);
             this.navBar.add_child(this.btnNext);
             contentLayout.add_child(this.navBar);
 
-            // Assemblage Final
             this.mainPanel.add_child(contentLayout);
             this._overlayBox.add_child(this.mainPanel);
             
             Main.layoutManager.addChrome(this._overlayBox);
 
-            // ÉVÉNEMENTS
-            this.searchEntry.clutter_text.connect('text-changed', () => this._onSearchChanged());
-            this.searchEntry.clutter_text.connect('key-press-event', (a, e) => {
-                if (e.get_key_symbol() === Clutter.KEY_Escape) this.hide();
+            // ÉVÉNEMENTS (Connectés une seule fois pour toute la vie de l'extension)
+            this._searchTextChangedId = this.searchEntry.clutter_text.connect('text-changed', () => this._onSearchChanged());
+            this._searchKeyPressId = this.searchEntry.clutter_text.connect('key-press-event', (actor, event) => this._onKeyPress(event));
+        }
+
+        toggle() {
+            if (this._overlayBox && this._overlayBox.visible) {
+                this.hide();
+            } else {
+                this.show();
+            }
+        }
+
+        show() {
+            this._buildUI();
+            if (!this._overlayBox) return;
+
+            let monitor = Main.layoutManager.primaryMonitor;
+            if (monitor) {
+                this._overlayBox.set_position(monitor.x, monitor.y);
+                this._overlayBox.set_size(monitor.width, monitor.height);
+            }
+
+            let needsRebuild = (this._currentPage !== 0) || !this._gridBuilt;
+            this._currentPage = 0;
+            this._currentFilter = SEARCH_TYPE.ALL;
+            
+            let filterChildren = this.filterBox.get_children();
+            filterChildren.forEach(c => c.remove_style_class_name('selected'));
+            if (filterChildren.length > 0) filterChildren[0].add_style_class_name('selected');
+
+            if (this.searchEntry.get_text().length > 0) {
+                // Déclenche automatiquement _onSearchChanged -> _showAppGrid(true)
+                this.searchEntry.set_text('');
+            } else if (needsRebuild) {
+                this._showAppGrid(true);
+            }
+
+            this._overlayBox.show();
+
+            this.mainPanel.remove_all_transitions();
+            this.mainPanel.set_scale(0.95, 0.95);
+            this.mainPanel.set_opacity(0);
+            this.mainPanel.ease({
+                scale_x: 1.0,
+                scale_y: 1.0,
+                opacity: 255,
+                duration: 150,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD
             });
 
-            this.searchEntry.set_text('');
-            this._currentPage = 0;
-            this._currentFilter = SEARCH_TYPE.ALL; 
-            this.filterBox.get_children().forEach(c => c.remove_style_class_name('selected'));
-            this.filterBox.get_children()[0].add_style_class_name('selected'); 
+            this.searchEntry.clutter_text.grab_key_focus();
+        }
 
-            this._allApps = Gio.AppInfo.get_all()
-                .filter(a => a.should_show())
-                .sort((a, b) => a.get_display_name().localeCompare(b.get_display_name()));
+        _onKeyPress(event) {
+            let symbol = event.get_key_symbol();
+            
+            if (symbol === Clutter.KEY_Escape) {
+                this.hide();
+                return Clutter.EVENT_STOP;
+            }
 
-            this._showAppGrid();
+            if (this._resultButtons.length > 0) {
+                if (symbol === Clutter.KEY_Down) {
+                    this._selectedIndex = Math.min(this._selectedIndex + 1, this._resultButtons.length - 1);
+                    this._updateSelection();
+                    return Clutter.EVENT_STOP;
+                } else if (symbol === Clutter.KEY_Up) {
+                    this._selectedIndex = Math.max(this._selectedIndex - 1, 0);
+                    this._updateSelection();
+                    return Clutter.EVENT_STOP;
+                } else if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
+                    if (this._selectedIndex >= 0 && this._selectedIndex < this._resultButtons.length) {
+                        this._resultButtons[this._selectedIndex].emit('clicked', 0);
+                    }
+                    return Clutter.EVENT_STOP;
+                }
+            }
+
+            return Clutter.EVENT_PROPAGATE;
+        }
+
+        _updateSelection() {
+            this._resultButtons.forEach((btn, index) => {
+                if (index === this._selectedIndex) {
+                    btn.add_style_class_name('selected');
+                } else {
+                    btn.remove_style_class_name('selected');
+                }
+            });
         }
 
         _onSearchChanged() {
             if (this._searchTimeout) {
                 GLib.source_remove(this._searchTimeout);
+                this._searchTimeout = null;
             }
 
             let text = this.searchEntry.get_text();
+            this.btnClear.opacity = text.length > 0 ? 255 : 0;
+            this.btnClear.reactive = text.length > 0;
             
             if (text.length === 0) {
-                this._showAppGrid();
+                this._showAppGrid(true);
                 return;
             }
 
-            this._searchTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+            this._searchTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
                 this._triggerSearch(text);
                 this._searchTimeout = null;
                 return GLib.SOURCE_REMOVE;
@@ -377,16 +472,29 @@ export const AppLauncher = GObject.registerClass(
         }
 
         _updateNavButtons() {
-            let maxPage = Math.ceil(this._allApps.length / this._appsPerPage) - 1;
+            let maxPage = Math.max(0, Math.ceil(this._allApps.length / this._appsPerPage) - 1);
             this.btnPrev.opacity = this._currentPage > 0 ? 255 : 100;
             this.btnPrev.reactive = this._currentPage > 0;
             this.btnNext.opacity = this._currentPage < maxPage ? 255 : 100;
             this.btnNext.reactive = this._currentPage < maxPage;
+
+            this.pageIndicators.destroy_all_children();
+            for (let i = 0; i <= maxPage; i++) {
+                let dot = new St.Widget({
+                    style_class: `prism-page-dot ${i === this._currentPage ? 'active' : ''}`
+                });
+                this.pageIndicators.add_child(dot);
+            }
         }
 
-        _showAppGrid() {
+        _showAppGrid(forceRebuild = false) {
+            this._selectedIndex = -1;
+            this._resultButtons = [];
             this.filterBox.hide();
             this.navBar.show();
+
+            if (!forceRebuild && this._gridBuilt) return;
+
             this.innerBox.destroy_all_children();
             this._updateNavButtons();
 
@@ -425,14 +533,13 @@ export const AppLauncher = GObject.registerClass(
                     x_align: Clutter.ActorAlign.CENTER 
                 });
 
-                let name = app.get_display_name();
-                let safeName = name.length > 15 ? name.substring(0, 13) + '...' : name;
-
                 let nameLabel = new St.Label({ 
-                    text: safeName, 
+                    text: app.get_display_name(), 
                     style_class: 'prism-card-label',
                     x_align: Clutter.ActorAlign.CENTER 
                 });
+                nameLabel.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+                nameLabel.set_width(110);
 
                 cardBox.add_child(icon);
                 cardBox.add_child(nameLabel);
@@ -445,20 +552,25 @@ export const AppLauncher = GObject.registerClass(
 
                 currentRow.add_child(appBtn);
             });
+
+            this._gridBuilt = true;
         }
 
         async _triggerSearch(text) {
             const searchGeneration = ++this._searchGeneration;
-            const overlayBox = this._overlayBox;
+            this._gridBuilt = false; // On détruit la grille pour afficher la liste
             this.filterBox.show();
             this.navBar.hide(); 
             this.innerBox.destroy_all_children();
+            this._resultButtons = [];
+            this._selectedIndex = 0;
             
             try {
-                let allResults = await this._searchEngine.search(text);
+                let allResults = await this._searchEngine.search(text, this._allApps);
                 
                 if (searchGeneration !== this._searchGeneration ||
-                    this._overlayBox !== overlayBox ||
+                    !this._overlayBox ||
+                    !this._overlayBox.visible ||
                     !this.searchEntry ||
                     this.searchEntry.get_text() !== text) return;
 
@@ -470,9 +582,9 @@ export const AppLauncher = GObject.registerClass(
                     return;
                 }
 
-                filtered.slice(0, 9).forEach(r => {
+                filtered.slice(0, 9).forEach((r, index) => {
                     let btn = new St.Button({ 
-                        style_class: 'prism-launcher-list-item', 
+                        style_class: `prism-launcher-list-item ${index === 0 ? 'selected' : ''}`, 
                         reactive: true,
                         x_align: Clutter.ActorAlign.CENTER
                     });
@@ -482,29 +594,36 @@ export const AppLauncher = GObject.registerClass(
                         name: 'src-c-box-3', 
                         vertical: false,
                         x_expand: true,
-                        x_align: Clutter.ActorAlign.START
+                        x_align: Clutter.ActorAlign.START,
+                        y_align: Clutter.ActorAlign.CENTER
                     });
                     
                     let icon = new St.Icon({ gicon: r.icon, icon_size: 32, style_class: 'prism-list-icon' });
                     
                     let texts = new St.BoxLayout({name: 'src-c-box-4', vertical: true });
                     
-                    let name = r.name || "Inconnu";
-                    let safeName = name.length > 60 ? name.substring(0, 57) + '...' : name;
-                    
-                    let title = new St.Label({ text: safeName, style_class: 'prism-list-title' });
+                    let title = new St.Label({ text: r.name || "Inconnu", style_class: 'prism-list-title' });
+                    title.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+                    title.set_width(750);
                     
                     let typeText = "";
                     switch(r.type) {
-                        case SEARCH_TYPE.APP: typeText = "Application"; break;
-                        case SEARCH_TYPE.SETTING: typeText = "Paramètre"; break;
-                        case SEARCH_TYPE.FILE: typeText = "Fichier"; break;
-                        case SEARCH_TYPE.FOLDER: typeText = "Dossier"; break;
+                        case SEARCH_TYPE.APP: 
+                        case SEARCH_TYPE.SETTING:
+                            typeText = (r.appInfo.get_description() || "Application").replace(/\n/g, ' '); 
+                            break;
+                        case SEARCH_TYPE.FILE: 
+                        case SEARCH_TYPE.FOLDER:
+                            typeText = r.type === SEARCH_TYPE.FILE ? "Fichier • " : "Dossier • ";
+                            typeText += GLib.path_get_dirname(r.path).replace(GLib.get_home_dir(), '~');
+                            break;
                         case SEARCH_TYPE.WEB: typeText = "Internet"; break;
                         default: typeText = "Inconnu";
                     }
 
                     let subtitle = new St.Label({ text: typeText, style_class: 'prism-list-subtitle' });
+                    subtitle.clutter_text.ellipsize = Pango.EllipsizeMode.END;
+                    subtitle.set_width(750);
                     
                     texts.add_child(title);
                     texts.add_child(subtitle);
@@ -520,7 +639,15 @@ export const AppLauncher = GObject.registerClass(
                         this.hide();
                     });
 
+                    btn.connect('notify::hover', () => {
+                        if (btn.hover) {
+                            this._selectedIndex = index;
+                            this._updateSelection();
+                        }
+                    });
+
                     this.innerBox.add_child(btn);
+                    this._resultButtons.push(btn);
                 });
             } catch (e) {
                 console.error("PRISM Erreur de recherche: " + e);
@@ -528,26 +655,76 @@ export const AppLauncher = GObject.registerClass(
         }
 
         hide() {
+            if (!this._overlayBox || !this._overlayBox.visible) return;
+            
             this._searchGeneration++;
             this._searchEngine.abort();
 
-            if (this._overlayBox) {
-                global.stage.set_key_focus(null);
+            if (this._searchTimeout) {
+                GLib.source_remove(this._searchTimeout);
+                this._searchTimeout = null;
+            }
 
-                if (this._searchTimeout) {
-                    GLib.source_remove(this._searchTimeout);
-                    this._searchTimeout = null;
+            global.stage.set_key_focus(null);
+
+            this.mainPanel.remove_all_transitions();
+            this.mainPanel.ease({
+                scale_x: 0.95,
+                scale_y: 0.95,
+                opacity: 0,
+                duration: 100,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                onComplete: () => {
+                    if (this._overlayBox) {
+                        this._overlayBox.hide();
+                    }
                 }
-                
+            });
+        }
+
+        destroy() {
+            this._searchGeneration++;
+            if (this._searchEngine) {
+                this._searchEngine.abort();
+                this._searchEngine = null;
+            }
+
+            if (this._appMonitorId) {
+                this._appMonitor.disconnect(this._appMonitorId);
+                this._appMonitorId = null;
+            }
+
+            if (this._searchTimeout) {
+                GLib.source_remove(this._searchTimeout);
+                this._searchTimeout = null;
+            }
+
+            if (this.searchEntry && this.searchEntry.clutter_text) {
+                if (this._searchTextChangedId) this.searchEntry.clutter_text.disconnect(this._searchTextChangedId);
+                if (this._searchKeyPressId) this.searchEntry.clutter_text.disconnect(this._searchKeyPressId);
+            }
+            if (this.bgClicker && this._bgClickId) {
+                this.bgClicker.disconnect(this._bgClickId);
+            }
+
+            if (this._overlayBox) {
+                if (this.mainPanel) this.mainPanel.remove_all_transitions();
                 Main.layoutManager.removeChrome(this._overlayBox);
                 this._overlayBox.destroy();
                 this._overlayBox = null;
             }
-        }
 
-        destroy() {
-            this.hide();
-            this._searchEngine = null;
+            this.mainPanel = null;
+            this.bgClicker = null;
+            this.searchEntry = null;
+            this.btnClear = null;
+            this.filterBox = null;
+            this.innerBox = null;
+            this.navBar = null;
+            this.btnPrev = null;
+            this.btnNext = null;
+            this.pageIndicators = null;
+            this._resultButtons = [];
         }
     }
 );

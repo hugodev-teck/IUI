@@ -2473,6 +2473,9 @@ export default class PrismExtension extends Extension {
         this._stylesheet = this.dir.get_child('stylesheet.css');
         this._theme = St.ThemeContext.get_for_stage(global.stage).get_theme();
         this._theme.load_stylesheet(this._stylesheet);
+        this._interfaceSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
+        this._origEnableHotCorners = this._interfaceSettings.get_boolean('enable-hot-corners');
+        this._interfaceSettings.set_boolean('enable-hot-corners', false);
 
         if (!global.networkSetting) global.networkSetting = new NetworkSetting(this);
         if (!global.myDock) global.myDock = new MyDock(this); 
@@ -2485,6 +2488,25 @@ export default class PrismExtension extends Extension {
             }
         }).catch(err => {
             log(`WindowManager absent ou en attente d'installation : ${err.message}`);
+        });
+
+        this._originalOverviewToggle = Main.overview.toggle;
+        this._originalOverviewShow = Main.overview.show;
+
+        Main.overview.toggle = () => {
+            if (Main.layoutManager && Main.layoutManager._startingUp) return;
+            if (global.appLauncher) global.appLauncher.toggle();
+        };
+        
+        Main.overview.show = () => {
+            if (Main.layoutManager && Main.layoutManager._startingUp) return;
+            if (global.appLauncher) global.appLauncher.show();
+        };
+
+        this._startupCompleteId = Main.layoutManager.connect('startup-complete', () => {
+            if (this._originalOverviewToggle) {
+                Main.overview.hide();
+            }
         });
 
         let backgroundSettings = new Gio.Settings({ schema: 'org.gnome.desktop.background' });
@@ -2571,6 +2593,25 @@ export default class PrismExtension extends Extension {
         if (this._closeOverviewTimeout) {
             GLib.Source.remove(this._closeOverviewTimeout);
             this._closeOverviewTimeout = null;
+        }
+
+        if (this._startupCompleteId) {
+            Main.layoutManager.disconnect(this._startupCompleteId);
+            this._startupCompleteId = null;
+        }
+
+        if (this._originalOverviewToggle) {
+            Main.overview.toggle = this._originalOverviewToggle;
+            this._originalOverviewToggle = null;
+        }
+        if (this._originalOverviewShow) {
+            Main.overview.show = this._originalOverviewShow;
+            this._originalOverviewShow = null;
+        }
+
+        if (this._interfaceSettings && this._origEnableHotCorners !== undefined) {
+            this._interfaceSettings.set_boolean('enable-hot-corners', this._origEnableHotCorners);
+            this._interfaceSettings = null;
         }
 
         Main.panel.show();
