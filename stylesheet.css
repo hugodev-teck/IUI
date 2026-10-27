@@ -1489,3 +1489,47 @@
     background-color: #ff2222;
     transform: scale(1.1);
 }
+
+.prism-window-menu {
+    background-color: rgba(54, 53, 53, 0.836);
+    border-radius: 12px;
+    padding: 8px;
+    min-width: 220px;
+    spacing: 4px;
+}
+
+.prism-window-menu-item {
+    padding: 8px 12px;
+    color: #ffffff;
+    border-radius: 8px;
+    text-align: left;
+    transition-duration: 150ms;
+}
+
+.prism-window-menu-item:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.prism-window-menu-new {
+    padding: 8px 12px;
+    color: #ffffff;
+    border-radius: 8px;
+    font-weight: bold;
+    transition-duration: 150ms;
+}
+
+.prism-window-menu-new:hover {
+    background-color: rgba(184, 184, 184, 0.15);
+}
+
+.prism-window-menu-detach {
+    padding: 8px 12px;
+    color: #ff6b6b;
+    border-radius: 8px;
+    font-weight: bold;
+    transition-duration: 150ms;
+}
+
+.prism-window-menu-detach:hover {
+    background-color: rgba(255, 85, 85, 0.2);
+}

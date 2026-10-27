@@ -1042,103 +1042,165 @@ class MyDock {
     }
 
     _showWindowSelectMenu(sourceActor, windows, appInfo) {
-        if (this._customWindowMenu) {
-            this._customWindowMenu.destroy();
-            this._customWindowMenu = null;
+        if (this._customWindowMenu && this._customWindowMenuSource === sourceActor) {
+            this._closeWindowSelectMenu();
+            return;
         }
+
+        this._closeWindowSelectMenu();
+        this._hideWindowList();
+        this._customWindowMenuSource = sourceActor;
 
         this._customWindowMenu = new St.BoxLayout({
             vertical: true,
             style_class: 'prism-window-menu',
-            style: 'background-color: rgba(30, 30, 30, 0.95);; border-radius: 8px; padding: 5px; border: 1px solid rgba(255,255,255,0.1);',
             reactive: true
         });
+
+        this._customWindowMenu.connect('button-press-event', () => Clutter.EVENT_STOP);
+        this._customWindowMenu.connect('touch-event', () => Clutter.EVENT_STOP);
 
         windows.forEach(win => {
             let title = win.get_title() || appInfo.get_name();
             if (title.length > 40) title = title.substring(0, 37) + '...';
-            
-            let btn = new St.Button({
-                child: new St.Label({ text: title }),
-                style: 'padding: 8px 12px; color: white; text-align: left; border-radius: 4px;',
-                reactive: true,
-                can_focus: true,
-                track_hover: true
+
+            let label = new St.Label({
+                text: title,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
             });
 
-            btn.connect('notify::hover', () => {
-                btn.style = btn.hover ? 'padding: 8px 12px; color: white; text-align: left; border-radius: 4px; background-color: rgba(255,255,255,0.1);' 
-                                      : 'padding: 8px 12px; color: white; text-align: left; border-radius: 4px;';
+            let btn = new St.Button({
+                child: label,
+                style_class: 'prism-window-menu-item',
+                reactive: true,
+                can_focus: true,
+                track_hover: true,
+                x_expand: true,
+                x_align: Clutter.ActorAlign.FILL
             });
 
             btn.connect('clicked', () => {
                 win.activate(global.get_current_time());
-                this._customWindowMenu.destroy();
-                this._customWindowMenu = null;
+                this._closeWindowSelectMenu();
             });
 
             this._customWindowMenu.add_child(btn);
         });
 
+        if (windows.length > 0) {
+            let sep = new St.Widget({
+                style: 'height: 1px; background-color: rgba(255, 255, 255, 0.12); margin: 4px 0;',
+                x_expand: true
+            });
+            this._customWindowMenu.add_child(sep);
+        }
+
         let newBtn = new St.Button({
-            child: new St.Label({ text: "Nouvelle fenêtre" }),
-            style: 'padding: 8px 12px; color: #ffffff; text-align: center; font-weight: bold; margin-top: 4px;',
-            reactive: true
+            child: new St.Label({
+                text: "Nouvelle fenêtre",
+                x_align: Clutter.ActorAlign.CENTER
+            }),
+            style_class: 'prism-window-menu-new',
+            reactive: true,
+            can_focus: true,
+            track_hover: true,
+            x_expand: true,
+            x_align: Clutter.ActorAlign.FILL
         });
+
         newBtn.connect('clicked', () => {
             appInfo.launch([], null);
-            this._customWindowMenu.destroy();
-            this._customWindowMenu = null;
+            this._closeWindowSelectMenu();
         });
         this._customWindowMenu.add_child(newBtn);
 
         Main.layoutManager.addChrome(this._customWindowMenu);
-        
+
         let [iconX, iconY] = sourceActor.get_transformed_position();
-        let [iconWidth, iconHeight] = sourceActor.get_transformed_size();
-        
+        let [iconWidth] = sourceActor.get_transformed_size();
+
         this._customWindowMenu.clutter_text_direction = Clutter.TextDirection.LTR;
         this._customWindowMenu.queue_relayout();
-        
+
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             if (this._customWindowMenu) {
                 let menuWidth = this._customWindowMenu.width;
                 let menuHeight = this._customWindowMenu.height;
-                
-                this._customWindowMenu.set_position(
-                    iconX + (iconWidth / 2) - (menuWidth / 2),
-                    iconY - menuHeight - 20 
-                );
+                let monitor = Main.layoutManager.primaryMonitor;
+
+                let posX = Math.round(iconX + (iconWidth / 2) - (menuWidth / 2));
+                posX = Math.max(monitor.x + 8, Math.min(monitor.x + monitor.width - menuWidth - 8, posX));
+                let posY = Math.max(monitor.y + 8, Math.round(iconY - menuHeight - 16));
+
+                this._customWindowMenu.set_position(posX, posY);
             }
             return GLib.SOURCE_REMOVE;
         });
 
-        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
-            this._stageEventId = global.stage.connect('captured-event', (actor, event) => {
-                if (event.type() === Clutter.EventType.BUTTON_PRESS) {
-                    let target = event.get_source();
-                    
-                    if (this._customWindowMenu && !this._customWindowMenu.contains(target)) {
-                        this._closeWindowSelectMenu();
-                    }
-                }
+        this._menuOutsideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+            this._menuOutsideTimeoutId = 0;
+            if (!this._customWindowMenu) return GLib.SOURCE_REMOVE;
 
-                return Clutter.EVENT_PROPAGATE; 
+            this._stageEventId = global.stage.connect('captured-event', (stage, event) => {
+                let type = event.type();
+                if (type === Clutter.EventType.BUTTON_PRESS || type === Clutter.EventType.TOUCH_BEGIN) {
+                    let coords = event.get_coords();
+                    if (!coords) return Clutter.EVENT_PROPAGATE;
+                    let [mouseX, mouseY] = coords;
+
+                    let isInside = (targetActor, px, py) => {
+                        if (!targetActor || !targetActor.visible) return false;
+                        let [ax, ay] = targetActor.get_transformed_position();
+                        let [aw, ah] = targetActor.get_transformed_size();
+                        return px >= ax && px <= ax + aw && py >= ay && py <= ay + ah;
+                    };
+
+                    if (isInside(this._customWindowMenu, mouseX, mouseY)) {
+                        return Clutter.EVENT_PROPAGATE;
+                    }
+
+                    if (isInside(sourceActor, mouseX, mouseY)) {
+                        this._closeWindowSelectMenu();
+                        return Clutter.EVENT_STOP;
+                    }
+
+                    this._closeWindowSelectMenu();
+                    return Clutter.EVENT_PROPAGATE;
+                }
+                return Clutter.EVENT_PROPAGATE;
             });
+
+            this._menuFocusWindowId = global.display.connect('notify::focus-window', () => {
+                this._closeWindowSelectMenu();
+            });
+
             return GLib.SOURCE_REMOVE;
         });
     }
 
     _closeWindowSelectMenu() {
-        if (this._customWindowMenu) {
-            Main.layoutManager.removeChrome(this._customWindowMenu); 
-            this._customWindowMenu.destroy();
-            this._customWindowMenu = null;
+        this._customWindowMenuSource = null;
+
+        if (this._menuOutsideTimeoutId) {
+            GLib.Source.remove(this._menuOutsideTimeoutId);
+            this._menuOutsideTimeoutId = 0;
         }
-        
+
         if (this._stageEventId) {
             global.stage.disconnect(this._stageEventId);
             this._stageEventId = null;
+        }
+
+        if (this._menuFocusWindowId) {
+            global.display.disconnect(this._menuFocusWindowId);
+            this._menuFocusWindowId = 0;
+        }
+
+        if (this._customWindowMenu) {
+            Main.layoutManager.removeChrome(this._customWindowMenu);
+            this._customWindowMenu.destroy();
+            this._customWindowMenu = null;
         }
     }
 
